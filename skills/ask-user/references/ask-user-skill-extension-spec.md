@@ -72,12 +72,18 @@ The `ask_user` tool accepts an optional `displayMode` parameter:
 
 - `"overlay"` *(default)*: centered modal; covers the conversation underneath.
 - `"inline"`: rendered in the conversation flow; preceding messages stay visible.
+- `"adaptive"`: centered popup sized to fit the options' descriptions, up to 65% of the terminal.
+- `"fullscreen"`: fills the terminal. In popup modes the user can switch to fullscreen and back with Alt+M.
 
 Guidance:
 
 - Omit `displayMode` to respect the user's configured preference (`PI_ASK_USER_DISPLAY_MODE` environment variable or `displayMode` in `ask-user.json`).
 - Pass `"inline"` only when the immediately preceding assistant message (summary, trade-offs, recommendation) is the primary context for the decision and must remain visible.
 - Pass `"overlay"` only to explicitly force the modal style (rare).
+
+### Numbered options (optional)
+
+Give every option a unique positive integer `id` to get `selectedIds` back with the answer, and use `preselectedIds` to start with options ticked. Multi-select answers can be `combined`: ticked options plus the user's own text.
 
 ### Batches (optional)
 

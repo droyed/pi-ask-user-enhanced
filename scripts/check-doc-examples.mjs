@@ -19,6 +19,7 @@ assert.ok(tool, "ask_user must be registered");
 let checked = 0;
 for (const file of [
    "README.md",
+   "ENHANCED.md",
    "skills/ask-user/SKILL.md",
    "skills/ask-user/references/ask-user-skill-extension-spec.md",
 ]) {

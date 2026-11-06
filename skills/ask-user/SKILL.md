@@ -55,6 +55,8 @@ Call `ask_user` with one decision at a time:
 - `allowMultiple`: `false` unless independent selections are genuinely needed
 - `allowFreeform`: usually `true`
 - `displayMode` *(optional)*: `"overlay"` (default) or `"inline"`. Use `"inline"` when preceding assistant context (summary, trade-offs, recommendation) is essential to the decision and should remain visible — overlays cover the conversation underneath. The user may set a personal default via the `PI_ASK_USER_DISPLAY_MODE` environment variable or `displayMode` in `ask-user.json`; only pass this when you intentionally want to override it for one call.
+- `displayMode` also accepts `"adaptive"` (a popup sized to the options' descriptions) and `"fullscreen"`; the user can switch to fullscreen and back with Alt+M. Omit it to respect the user's preference.
+- Option `id` / `preselectedIds` *(optional)*: give every option a unique positive integer `id` when you'll refer to choices by number later; answers then include `selectedIds`. `preselectedIds` starts with your recommended options ticked (at most one for single-select).
 - `contextExpanded` *(optional)*: `true` opens oversized context fully expanded instead of collapsed behind a one-line summary. The user may set a personal default via `PI_ASK_USER_CONTEXT_EXPANDED` or `contextExpanded` in `ask-user.json`; only pass this when the context is the evidence the user needs to weigh the options.
 
 When 2-4 decisions at the same boundary are independent of each other and their prerequisites are settled, you may ask them together with `questions` instead of `question`. Each entry carries its own `question`, `context`, `options`, `allowMultiple`, and `allowFreeform`. A top-level `question` sent with `questions` is only a heading, never asked. Never batch a decision whose options depend on another answer; ask it in a later call once that answer is known.
@@ -141,6 +143,24 @@ Good options include a short description when trade-offs are non-obvious.
   ],
   "allowMultiple": true,
   "allowFreeform": true
+}
+```
+
+### Multi-select with a recommended starting point
+
+Answers to multi-select questions can be `combined`: the ticked options plus the user's own text. Treat that text as part of the decision.
+
+```json
+{
+  "question": "Which hardening items should ship in the first wave?",
+  "context": "Items 1 and 3 fit this week's budget; 2 needs a schema change.",
+  "options": [
+    { "id": 1, "title": "Rate limiting" },
+    { "id": 2, "title": "Audit logging", "description": "Needs a new table" },
+    { "id": 3, "title": "Input schema validation" }
+  ],
+  "allowMultiple": true,
+  "preselectedIds": [1, 3]
 }
 ```
 
