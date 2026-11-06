@@ -2264,9 +2264,10 @@ class AskComponent extends Container {
     * list (clicks, wheel, scrollbar drags), and the action bar's buttons act
     * like their keys. Coordinates are relative to this component's frame.
     */
-   // Typed loosely: Container's signature names pi-tui mouse types that older Pi
-   // versions don't export. Pi wraps a plain { handled } result with the target itself.
-   override handleMouse(event: any): any {
+   // Typed loosely and without `override`: Container only has handleMouse (with
+   // mouse types) from Pi 1.0, and this must compile against 0.74 too. Pi wraps a
+   // plain { handled } result with the target itself.
+   handleMouse(event: any): any {
       return this.routeMouse(event as AskMouseEvent);
    }
 
