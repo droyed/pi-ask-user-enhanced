@@ -84,7 +84,7 @@ describe("loadAskUserSettings", () => {
 
    test("ignores wrong-typed and unrecognised values", () => {
       const filePath = tempSettingsFile(JSON.stringify({
-         displayMode: "fullscreen",
+         displayMode: "sideways",
          singleSelectLayout: "compact",
          allowComment: "yes",
          contextExpanded: 1,

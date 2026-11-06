@@ -670,7 +670,7 @@ describe("ask_user", () => {
    });
 
    test("ignores unrecognised PI_ASK_USER_DISPLAY_MODE value and falls back to overlay", async () => {
-      stubEnv("PI_ASK_USER_DISPLAY_MODE", "fullscreen");
+      stubEnv("PI_ASK_USER_DISPLAY_MODE", "sideways");
       const tool = await setupTool();
       let capturedOptions: any;
 
@@ -998,7 +998,8 @@ describe("ask_user", () => {
 
          await tool.execute(
             "tool-call-id",
-            { question: "Q", options: ["A"], overlayToggleKey: "off" },
+            // Enhanced build: the same listener serves the fullscreen key (alt+m), so turn both off.
+            { question: "Q", options: ["A"], overlayToggleKey: "off", fullscreenToggleKey: "off" },
             undefined,
             undefined,
             {
@@ -1723,7 +1724,9 @@ describe("ask_user", () => {
       );
 
       expect(result.isError).not.toBe(true);
-      expect(rendered).toContain("## Alpha");
+      // Enhanced build: the preview's header row shows the title (no "## title" heading) beside the list.
+      expect(rendered).toContain(" │ Alpha");
+      expect(rendered).not.toContain("## Alpha");
       expect(rendered).toContain("The alpha option keeps the rollout conservative.");
    });
 
@@ -1787,8 +1790,9 @@ describe("ask_user", () => {
          return output;
       };
 
-      expect(await render()).not.toContain("## Alpha");
-      expect(await render("auto")).toContain("## Alpha");
+      // Enhanced build: the split pane (and its " │ " divider) marks the details layout.
+      expect(await render()).not.toContain(" │ ");
+      expect(await render("auto")).toContain(" │ ");
    });
 
    test("shows a custom response preview in the wide details pane", async () => {
@@ -2783,7 +2787,8 @@ describe("ask_user", () => {
       expect(previewError).toBeUndefined();
       // Confirm the raw markdown fell through to plain Text rendering rather
       // than getting silently dropped when the theme proxy was unavailable.
-      expect(preview).toContain("## Alpha");
+      // Enhanced build: the title is the preview's header row, not a "## Alpha" heading.
+      expect(preview).toContain(" │ Alpha");
       expect(preview).toContain("First **emphasised** option");
    });
 
@@ -3995,7 +4000,7 @@ test("top-level single-question fields sent with questions are ignored (#88)", a
       });
 
       test("ignores unrecognised ask-user.json displayMode and falls back to overlay", async () => {
-         stubSettingsFile(JSON.stringify({ displayMode: "fullscreen" }));
+         stubSettingsFile(JSON.stringify({ displayMode: "sideways" }));
          const capturedOptions = await executeWithCapturedOptions({});
          expect(capturedOptions.overlay).toBe(true);
       });
@@ -4042,14 +4047,14 @@ test("top-level single-question fields sent with questions are ignored (#88)", a
       test("applies singleSelectLayout from ask-user.json when the env var is unset", async () => {
          stubSettingsFile(JSON.stringify({ singleSelectLayout: "list" }));
          const rendered = await renderSingleSelectWithSettings();
-         expect(rendered).not.toContain("## Alpha");
+         expect(rendered).not.toContain(" │ ");
       });
 
       test("PI_ASK_USER_SINGLE_SELECT_LAYOUT=auto overrides ask-user.json singleSelectLayout", async () => {
          stubSettingsFile(JSON.stringify({ singleSelectLayout: "list" }));
          stubEnv("PI_ASK_USER_SINGLE_SELECT_LAYOUT", "auto");
          const rendered = await renderSingleSelectWithSettings();
-         expect(rendered).toContain("## Alpha");
+         expect(rendered).toContain(" │ ");
       });
 
       test("valid overlayToggleKey in ask-user.json replaces the default alt+o", async () => {

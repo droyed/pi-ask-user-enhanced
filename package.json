@@ -1,6 +1,6 @@
 {
   "name": "pi-ask-user",
-  "version": "0.17.2",
+  "version": "0.17.2-enhanced.1.2.0",
   "description": "Interactive ask_user tool for pi-coding-agent with searchable split-pane selection UI, multi-select, and freeform input",
   "type": "module",
   "keywords": [
@@ -38,7 +38,9 @@
     "settings.ts",
     "single-select-layout.ts",
     "tern.ts",
+    "enhanced-ui.ts",
     "skills",
+    "ENHANCED.md",
     "README.md",
     "LICENSE"
   ],
