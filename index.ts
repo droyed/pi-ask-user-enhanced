@@ -142,8 +142,11 @@ function safeMarkdownTheme(): MarkdownTheme | undefined {
 }
 
 type AskOptionInput = QuestionOption | string;
+type IdentifiedOption = QuestionOption & { id?: number };
 
-type AskDisplayMode = "overlay" | "inline";
+
+type AskDisplayMode = "overlay" | "inline" | "adaptive" | "fullscreen";
+// PI_ASK_USER_FULLSCREEN_V4: explicit modes, no prompt-only fallbacks.
 type AskSingleSelectLayout = "auto" | "list";
 
 interface BatchQuestionInput {
@@ -152,6 +155,7 @@ interface BatchQuestionInput {
    options?: AskOptionInput[];
    allowMultiple?: boolean;
    allowFreeform?: boolean;
+   preselectedIds?: number[];
 }
 
 interface AskParams {
@@ -162,6 +166,7 @@ interface AskParams {
    allowMultiple?: boolean;
    allowFreeform?: boolean;
    allowComment?: boolean;
+   preselectedIds?: number[];
    displayMode?: AskDisplayMode;
    singleSelectLayout?: AskSingleSelectLayout;
    contextExpanded?: boolean;
@@ -174,6 +179,14 @@ type AskResponse =
    | {
       kind: "selection";
       selections: string[];
+      selectedIds?: number[];
+      comment?: string;
+   }
+   | {
+      kind: "combined";
+      selections: string[];
+      selectedIds?: number[];
+      text: string;
       comment?: string;
    }
    | {
@@ -196,6 +209,7 @@ interface BatchQuestion {
    options: QuestionOption[];
    allowMultiple: boolean;
    allowFreeform: boolean;
+   preselectedIds: number[];
 }
 
 type BatchAnswer = { status: "answered"; response: AskResponse } | { status: "skipped" };
@@ -237,11 +251,55 @@ function coerceOption(option: unknown): QuestionOption | null {
          if (typeof value === "string" && value.trim()) {
             const description =
                typeof record.description === "string" && record.description.trim() ? record.description : undefined;
-            return description ? { title: value.trim(), description } : { title: value.trim() };
+            const result: IdentifiedOption = description ? { title: value.trim(), description } : { title: value.trim() };
+            if (record.id !== undefined) result.id = record.id as number;
+            return result;
          }
       }
    }
    return null;
+}
+
+
+/** Fail closed before opening a UI; allow legacy id-less questions unchanged. */
+function normalizeIdentifiedOptions(
+   rawOptions: unknown[], preselectedIds: unknown, allowMultiple: boolean, label: string,
+): { options: QuestionOption[]; preselectedIds: number[] } {
+   const usesIds = preselectedIds !== undefined || rawOptions.some((o) => o !== null && typeof o === "object" && "id" in o);
+   const options = rawOptions.map(coerceOption).filter((o): o is QuestionOption => o !== null);
+   if (!usesIds) return { options, preselectedIds: [] };
+   if (options.length !== rawOptions.length) throw new Error(`${label}.options has malformed entries; numeric-ID mode requires valid option objects.`);
+   const ids = new Set<number>();
+   for (const [index, option] of options.entries()) {
+      const id = (option as IdentifiedOption).id;
+      if (!Number.isSafeInteger(id) || (id as number) <= 0) throw new Error(`${label}.options[${index}].id must be a positive safe integer.`);
+      if (ids.has(id as number)) throw new Error(`${label}.options contains duplicate id ${id}.`);
+      ids.add(id as number);
+   }
+   if (preselectedIds === undefined) return { options, preselectedIds: [] };
+   if (!Array.isArray(preselectedIds)) throw new Error(`${label}.preselectedIds must be an array of option IDs.`);
+   if (!allowMultiple && preselectedIds.length > 1) throw new Error(`${label}.preselectedIds permits at most one ID for single-select.`);
+   const seen = new Set<number>();
+   for (const id of preselectedIds) {
+      if (!Number.isSafeInteger(id) || !ids.has(id)) throw new Error(`${label}.preselectedIds includes unknown or invalid ID: ${id}.`);
+      if (seen.has(id)) throw new Error(`${label}.preselectedIds contains duplicate ID ${id}.`);
+      seen.add(id);
+   }
+   return { options, preselectedIds: [...seen] };
+}
+
+function selectedIdsForIndices(options: QuestionOption[], indices: number[]): number[] | undefined {
+   const ids = indices.map((index) => (options[index] as IdentifiedOption | undefined)?.id);
+   return ids.every((id) => id !== undefined) ? ids as number[] : undefined;
+}
+
+function createCombinedResponse(selections: string[], text: string, selectedIds?: number[], comment?: string): AskResponse | null {
+   const cleanText = text.trim();
+   const cleanSelections = selections.map((value) => value.trim()).filter(Boolean);
+   if (!cleanText) return createSelectionResponse(cleanSelections, comment, selectedIds);
+   if (!cleanSelections.length) return createFreeformResponse(cleanText);
+   return { kind: "combined", selections: cleanSelections, ...(selectedIds ? { selectedIds } : {}), text: cleanText,
+      ...(normalizeOptionalComment(comment) ? { comment: normalizeOptionalComment(comment) } : {}) };
 }
 
 function formatOptionsForMessage(options: QuestionOption[]): string {
@@ -281,20 +339,23 @@ function createFreeformResponse(text: string | null | undefined): AskResponse | 
    return trimmed ? { kind: "freeform", text: trimmed } : null;
 }
 
-function createSelectionResponse(selections: string[], comment?: string | null): AskResponse | null {
+function createSelectionResponse(selections: string[], comment?: string | null, selectedIds?: number[]): AskResponse | null {
    const normalizedSelections = selections.map((selection) => selection.trim()).filter(Boolean);
    if (normalizedSelections.length === 0) return null;
 
    const normalizedComment = normalizeOptionalComment(comment);
    return normalizedComment
-      ? { kind: "selection", selections: normalizedSelections, comment: normalizedComment }
-      : { kind: "selection", selections: normalizedSelections };
+      ? { kind: "selection", selections: normalizedSelections, ...(selectedIds ? { selectedIds } : {}), comment: normalizedComment }
+      : { kind: "selection", selections: normalizedSelections, ...(selectedIds ? { selectedIds } : {}) };
 }
 
 function formatResponseSummary(response: AskResponse): string {
    if (response.kind === "freeform") return response.text;
+   const namedSelections = response.selections.map((title, index) =>
+      response.selectedIds?.[index] !== undefined ? `${response.selectedIds[index]}: ${title}` : title).join(", ");
+   if (response.kind === "combined") return `${namedSelections} + ${response.text}${response.comment ? ` — ${response.comment}` : ""}`;
 
-   const selections = response.selections.join(", ");
+   const selections = namedSelections;
    return response.comment ? `${selections} — ${response.comment}` : selections;
 }
 
@@ -315,8 +376,8 @@ function isCancelledInput(value: unknown): value is null | undefined {
    return value === null || value === undefined;
 }
 
-function isSelectionResponse(response: AskResponse): response is Extract<AskResponse, { kind: "selection" }> {
-   return response.kind === "selection";
+function isSelectionResponse(response: AskResponse): response is Extract<AskResponse, { kind: "selection" | "combined" }> {
+   return response.kind === "selection" || response.kind === "combined";
 }
 
 function createSelectListTheme(theme: Theme) {
@@ -525,14 +586,16 @@ function buildCustomUIOptions(
       case "inline":
          return undefined;
       case "overlay":
+      case "adaptive":
+      case "fullscreen":
          return {
             overlay: true,
             overlayOptions: {
                anchor: "center" as const,
-               width: ASK_OVERLAY_WIDTH,
-               minWidth: ASK_OVERLAY_MIN_WIDTH,
-               maxHeight: "85%",
-               margin: 1,
+               width: displayMode === "fullscreen" ? "100%" : ASK_OVERLAY_WIDTH,
+               minWidth: displayMode === "fullscreen" ? 1 : ASK_OVERLAY_MIN_WIDTH,
+               maxHeight: displayMode === "fullscreen" ? "100%" : displayMode === "adaptive" ? "65%" : "85%",
+               margin: displayMode === "fullscreen" ? 0 : 1,
             },
             ...(onHandle ? { onHandle } : {}),
          };
@@ -554,15 +617,118 @@ function buildCustomUIOptions(
    }
 }
 
+// PI_ASK_USER_PREVIEW_SCROLL_V43: retained scrollbar feature marker.
+// PI_ASK_USER_UNIVERSAL_PREVIEW_V11: shared structure for every visible option preview.
+// PI_ASK_USER_DYNAMIC_SCROLLBAR_V112: show the rail only when the preview overflows.
+interface UniversalPreviewResult {
+   lines: string[];
+   offset: number;
+   totalLines: number;
+   viewportRows: number;
+}
+function renderUniversalPreviewPane(args: {
+   width: number;
+   maxRows: number;
+   title: string;
+   detail: string;
+   position: number;
+   count: number;
+   status: string;
+   scrollOffset: number;
+   theme: Theme;
+}): UniversalPreviewResult {
+   const { width, title, detail, position, count, status, theme } = args;
+   const textWidth = Math.max(1, width - 5);
+   const mdTheme = safeMarkdownTheme();
+   let docLines: string[];
+   if (mdTheme) {
+      docLines = new Markdown(detail, 0, 0, mdTheme).render(textWidth);
+   } else {
+      docLines = [];
+      for (const line of detail.split(/\r?\n/)) {
+         const wrapped = wrapTextWithAnsi(line, textWidth);
+         docLines.push(...(wrapped.length ? wrapped : [""]));
+      }
+   }
+   while (docLines.length > 0 && docLines[docLines.length - 1]?.trim() === "") docLines.pop();
+
+   const limit = Math.max(1, args.maxRows);
+   const headerRows = limit >= 8 ? 4 : limit >= 6 ? 3 : limit >= 5 ? 2 : limit >= 2 ? 1 : 0;
+   const footerRows = limit >= 3 ? 1 : 0;
+   const viewportRows = Math.max(1, limit - headerRows - footerRows);
+   const maxOffset = Math.max(0, docLines.length - viewportRows);
+   const offset = Math.max(0, Math.min(args.scrollOffset, maxOffset));
+   const start = docLines.length ? offset + 1 : 0;
+   const finish = Math.min(docLines.length, offset + viewportRows);
+   // The rail spans the entire pane, including its fixed header and footer.
+   // Compute the thumb in that same coordinate space so both endpoints touch.
+   const trackRows = limit;
+   const thumbLen = maxOffset > 0
+      ? Math.max(1, Math.min(trackRows, Math.round(trackRows * viewportRows / Math.max(1, docLines.length))))
+      : trackRows;
+   const maxThumbStart = trackRows - thumbLen;
+   const thumbStart = maxOffset === 0 ? 0
+      : offset === 0 ? 0
+      : offset === maxOffset ? maxThumbStart
+      : Math.round(offset * maxThumbStart / maxOffset);
+   // Preserve the five-cell inset gutter whether the scrollbar is visible or not.
+   // On every render (including terminal resizes and selection changes), only
+   // paint the rail if the current, wrapped description exceeds the viewport.
+   const showScrollbar = maxOffset > 0;
+   const rail = (text: string, thumb: boolean): string =>
+      `${truncateToWidth(text, textWidth, "", true)} ${showScrollbar ? theme.fg(thumb ? "warning" : "accent", thumb ? "█" : "┃") : " "}   `;
+   const overflow = maxOffset === 0 ? "all visible" : offset === 0 ? "↓ more below" : offset === maxOffset ? "↑ at end" : "↑↓ more";
+   const header = [
+      theme.fg("accent", theme.bold(`Preview ${position}/${count} · ${start}–${finish}/${docLines.length}`)),
+      theme.fg("text", theme.bold(title)),
+      theme.fg("dim", status),
+      theme.fg("accent", `Scroll ${start}–${finish}/${docLines.length} · ${overflow}`),
+   ];
+   const withRail = (text: string, row: number): string =>
+      rail(text, row >= thumbStart && row < thumbStart + thumbLen);
+   const lines: string[] = header.slice(0, headerRows).map((text, row) => withRail(text, row));
+   for (let row = 0; row < viewportRows; row++) {
+      lines.push(withRail(docLines[offset + row] ?? "", headerRows + row));
+   }
+   if (footerRows) {
+      const hint = textWidth >= 57
+         ? "PgUp/PgDn page · Alt+↑/↓ line · Alt+Home/End jump"
+         : "PgUp/PgDn page · Alt+↑/↓ line";
+      lines.push(withRail(theme.fg("dim", hint), headerRows + viewportRows));
+   }
+   return { lines: lines.slice(0, limit), offset, totalLines: docLines.length, viewportRows };
+}
+
 class MultiSelectList implements Component {
    private options: QuestionOption[];
    private allowFreeform: boolean;
    private allowComment: boolean;
    private theme: Theme;
+   private multiPreviewLayout: AskSingleSelectLayout;
+   private previewScrollOffset = 0;
+   private previewTotalLines = 0;
+   private previewViewportRows = 0;
+   private previewSelectionIndex = -1;
+   private previewActive = false;
+   private previewLeftWidth = 0;
    private keybindings: KeybindingsManager;
    private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
    private checked = new Set<number>();
+   // PI_ASK_USER_PRESELECT_COMBINED_V113: preserve selections across custom editor.
+   public selectedOptionIndices(explicitOnly = false): number[] {
+      const indices = [...this.checked].sort((a, b) => a - b);
+      return explicitOnly ? indices : (indices.length ? indices : (this.selectedIndex < this.options.length ? [this.selectedIndex] : []));
+   }
+   public preselect(ids: number[]): void {
+      this.checked.clear();
+      for (const id of ids) {
+         const index = this.options.findIndex((option) => (option as QuestionOption & { id?: number }).id === id);
+         if (index >= 0) this.checked.add(index);
+      }
+      if (this.checked.size) this.selectedIndex = Math.min(...this.checked);
+      this.invalidate();
+   }
    private commentEnabled = false;
    private maxVisibleRows = 10;
    private cachedWidth?: number;
@@ -577,6 +743,7 @@ class MultiSelectList implements Component {
       allowFreeform: boolean,
       allowComment: boolean,
       theme: Theme,
+      multiPreviewLayout: AskSingleSelectLayout,
       keybindings: KeybindingsManager,
       commentToggle: ResolvedShortcut,
    ) {
@@ -584,6 +751,7 @@ class MultiSelectList implements Component {
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
+      this.multiPreviewLayout = multiPreviewLayout;
       this.keybindings = keybindings;
       this.commentToggle = commentToggle;
    }
@@ -639,6 +807,7 @@ class MultiSelectList implements Component {
    }
 
    handleInput(data: string): void {
+      if (this.handlePreviewKeys(data)) return;
       if (this.keybindings.matches(data, "tui.select.cancel")) {
          this.onCancel?.();
          return;
@@ -742,19 +911,117 @@ class MultiSelectList implements Component {
       if (activate) this.activate();
    }
 
-   render(width: number): string[] {
-      if (this.cachedLines && this.cachedWidth === width) {
-         return this.cachedLines;
-      }
+   // PI_ASK_USER_MULTI_PREVIEW_PATCH_V1: responsive details pane for multi-select.
+   // The existing `singleSelectLayout: "list"` preference also disables this pane.
+   private getMultiPreviewWidths(width: number): { left: number; right: number } | null {
+      if (this.multiPreviewLayout === "list" || width < SINGLE_SELECT_SPLIT_PANE_MIN_WIDTH) return null;
+      const available = width - SINGLE_SELECT_SPLIT_PANE_SEPARATOR.length;
+      if (available < SINGLE_SELECT_SPLIT_PANE_LEFT_MIN_WIDTH + SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH) return null;
+      const left = Math.max(
+         SINGLE_SELECT_SPLIT_PANE_LEFT_MIN_WIDTH,
+         Math.min(Math.floor(available * 0.45), available - SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH),
+      );
+      const right = available - left;
+      return right >= SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH ? { left, right } : null;
+   }
 
+   private scrollPreview(delta: number): void {
+      const maxOffset = Math.max(0, this.previewTotalLines - this.previewViewportRows);
+      const next = Math.max(0, Math.min(maxOffset, this.previewScrollOffset + delta));
+      if (next !== this.previewScrollOffset) {
+         this.previewScrollOffset = next;
+         this.invalidate();
+      }
+   }
+
+   public handlePreviewKeys(data: string): boolean {
+      if (!this.previewActive || this.previewViewportRows < 1) return false;
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
+      const page = Math.max(1, this.previewViewportRows - 1);
+      if (matchesKey(data, Key.alt("down")) || matchesKey(data, Key.alt("j"))) this.scrollPreview(1);
+      else if (matchesKey(data, Key.alt("up")) || matchesKey(data, Key.alt("k"))) this.scrollPreview(-1);
+      else if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.alt("pageDown"))) this.scrollPreview(page);
+      else if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.alt("pageUp"))) this.scrollPreview(-page);
+      else if (matchesKey(data, Key.alt("home"))) this.scrollPreview(-this.previewTotalLines);
+      else if (matchesKey(data, Key.alt("end"))) this.scrollPreview(this.previewTotalLines);
+      else return false;
+      return true;
+   }
+
+   handleMouse(event: { type: string; x: number; wheelDelta?: number }): { handled: boolean } | undefined {
+      // Pi's alternate-screen TUI routes normalized wheel events to components.
+      // The left list still owns its ordinary input; only the right preview scrolls.
+      if (!this.previewActive || event.type !== "wheel" || event.x < this.previewLeftWidth + 1) return undefined;
+      const delta = event.wheelDelta ?? 0;
+      if (delta === 0) return undefined;
+      this.scrollPreview(Math.trunc(delta * 3));
+      return { handled: true };
+   }
+
+   private renderMultiPreview(width: number): string[] {
+      const count = this.getItemCount();
+      if (this.previewSelectionIndex !== this.selectedIndex) {
+         this.previewSelectionIndex = this.selectedIndex;
+         this.previewScrollOffset = 0;
+      }
+      let title: string;
+      let detail: string;
+      let status: string;
+      if (this.isCommentToggleRow(this.selectedIndex)) {
+         title = "Extra context";
+         detail = this.commentEnabled
+            ? "Enabled. You can add an explanation after selecting your choices."
+            : "Disabled. Press Space to enable additional context after selecting your choices.";
+         status = this.commentEnabled ? "Comment enabled" : "Comment disabled";
+      } else if (this.isFreeformRow(this.selectedIndex)) {
+         title = "Custom response";
+         detail = this.allowMultiple ? "Add custom text alongside the checked options." : "Enter a custom response instead of the listed options.";
+         status = "Press Space to open editor";
+      } else {
+         const option = this.options[this.selectedIndex];
+         title = option?.title ?? "No option selected";
+         detail = option?.description?.trim() || "No description provided for this option.";
+         status = this.checked.has(this.selectedIndex) ? "[✓] Selected" : "[ ] Not selected";
+      }
+      const preview = renderUniversalPreviewPane({
+         width, maxRows: this.maxVisibleRows, title, detail,
+         position: this.selectedIndex + 1, count, status,
+         scrollOffset: this.previewScrollOffset, theme: this.theme,
+      });
+      this.previewScrollOffset = preview.offset;
+      this.previewTotalLines = preview.totalLines;
+      this.previewViewportRows = preview.viewportRows;
+      return preview.lines;
+   }
+
+   render(width: number): string[] {
+      if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+      const panes = this.getMultiPreviewWidths(width);
+      let lines: string[];
+      if (panes) {
+         this.previewActive = true;
+         this.previewLeftWidth = panes.left;
+         const left = this.renderList(panes.left, true);
+         const right = this.renderMultiPreview(panes.right);
+         const rows = Math.min(this.maxVisibleRows, Math.max(left.length, right.length));
+         const separator = this.theme.fg("dim", SINGLE_SELECT_SPLIT_PANE_SEPARATOR);
+         lines = Array.from({ length: rows }, (_, row) =>
+            `${truncateToWidth(left[row] ?? "", panes.left, "", true)}${separator}${truncateToWidth(right[row] ?? "", panes.right, "")}`,
+         );
+      } else {
+         this.previewActive = false;
+         lines = this.renderList(width, false);
+      }
+      this.cachedWidth = width;
+      this.cachedLines = lines;
+      return lines;
+   }
+
+    private renderList(width: number, hideDescriptions: boolean): string[] {
       const theme = this.theme;
       const count = this.getItemCount();
 
-      if (count === 0) {
-         this.cachedLines = [theme.fg("warning", "No options")];
-         this.cachedWidth = width;
-         return this.cachedLines;
-      }
+      if (count === 0) return [theme.fg("warning", "No options")];
 
       const blocks: string[][] = [];
 
@@ -793,7 +1060,7 @@ class MultiSelectList implements Component {
          const firstLine = `${prefix} ${num} ${checkbox} ${title}`;
          block.push(truncateToWidth(firstLine, width, ""));
 
-         if (option.description) {
+         if (option.description && !hideDescriptions) {
             const indent = "      ";
             const wrapWidth = Math.max(10, width - indent.length);
             const wrapped = wrapTextWithAnsi(option.description, wrapWidth);
@@ -848,8 +1115,6 @@ class MultiSelectList implements Component {
          }
       }
 
-      this.cachedWidth = width;
-      this.cachedLines = lines;
       return lines;
    }
 }
@@ -863,9 +1128,27 @@ class WrappedSingleSelectList implements Component {
    private keybindings: KeybindingsManager;
    private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
+   public selectedOptionIndex(): number | undefined {
+      const filtered = this.getFilteredOptions();
+      const option = filtered[this.selectedIndex];
+      return option ? this.options.indexOf(option) : undefined;
+   }
+   public preselect(ids: number[]): void {
+      if (ids.length) {
+         const optionIndex = this.options.findIndex((option) => (option as QuestionOption & { id?: number }).id === ids[0]);
+         if (optionIndex >= 0) this.selectedIndex = optionIndex;
+      }
+      this.invalidate();
+   }
    private searchQuery = "";
    private commentEnabled = false;
    private maxVisibleRows = 12;
+   private previewScrollOffset = 0;
+   private previewTotalLines = 0;
+   private previewViewportRows = 0;
+   private previewSelectionKey = "";
+   private previewActive = false;
+   private previewLeftWidth = 0;
    private cachedWidth?: number;
    private cachedLines?: string[];
 
@@ -1037,63 +1320,74 @@ class WrappedSingleSelectList implements Component {
       return lines.slice(0, this.maxVisibleRows);
    }
 
+   private scrollPreview(delta: number): void {
+      const maxOffset = Math.max(0, this.previewTotalLines - this.previewViewportRows);
+      const next = Math.max(0, Math.min(maxOffset, this.previewScrollOffset + delta));
+      if (next !== this.previewScrollOffset) {
+         this.previewScrollOffset = next;
+         this.invalidate();
+      }
+   }
+
+   public handlePreviewKeys(data: string): boolean {
+      if (!this.previewActive || this.previewViewportRows < 1) return false;
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
+      const page = Math.max(1, this.previewViewportRows - 1);
+      if (matchesKey(data, Key.alt("down")) || matchesKey(data, Key.alt("j"))) this.scrollPreview(1);
+      else if (matchesKey(data, Key.alt("up")) || matchesKey(data, Key.alt("k"))) this.scrollPreview(-1);
+      else if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.alt("pageDown"))) this.scrollPreview(page);
+      else if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.alt("pageUp"))) this.scrollPreview(-page);
+      else if (matchesKey(data, Key.alt("home"))) this.scrollPreview(-this.previewTotalLines);
+      else if (matchesKey(data, Key.alt("end"))) this.scrollPreview(this.previewTotalLines);
+      else return false;
+      return true;
+   }
+
+   handleMouse(event: { type: string; x: number; wheelDelta?: number }): { handled: boolean } | undefined {
+      if (!this.previewActive || event.type !== "wheel" || event.x < this.previewLeftWidth + 1) return undefined;
+      const delta = event.wheelDelta ?? 0;
+      if (delta === 0) return undefined;
+      this.scrollPreview(Math.trunc(delta * 3));
+      return { handled: true };
+   }
+
    private buildPreviewLines(width: number, filteredOptions: QuestionOption[], maxLines: number): string[] {
       if (maxLines <= 0) return [];
-
-      const mdTheme = safeMarkdownTheme();
-
-      let md = "";
-
+      const count = this.getItemCount(filteredOptions);
+      const selected = filteredOptions[this.selectedIndex];
+      const key = `${this.searchQuery}\u0000${this.selectedIndex}\u0000${selected?.title ?? "special"}`;
+      if (this.previewSelectionKey !== key) {
+         this.previewSelectionKey = key;
+         this.previewScrollOffset = 0;
+      }
+      let title: string;
+      let detail: string;
+      let status: string;
       if (this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
-         md += "## Additional context\n\n";
-         md += `Currently: **${this.commentEnabled ? "Enabled" : "Disabled"}**\n\n`;
-         md += "Turn this on when the selected option needs extra explanation before the tool submits.\n";
+         title = "Additional context";
+         detail = this.commentEnabled
+            ? "Comment enabled. Add a comment after choosing the option."
+            : "Comment disabled. Press Enter to enable an optional explanation.";
+         status = this.commentEnabled ? "Comment enabled" : "Comment disabled";
       } else if (this.isFreeformRow(this.selectedIndex, filteredOptions)) {
-         md += "## Custom response\n\n";
-         md += "Open the editor to write **any** answer.\n\n";
-         md += "*Use this when none of the listed options fit.*\n";
-         if (this.searchQuery) {
-            md += `\n> Current filter: \`${this.searchQuery}\`\n`;
-         }
+         title = "Custom response";
+         detail = "Open the editor to write any answer when none of the listed options fit.";
+         if (this.searchQuery) detail += `\n\nCurrent filter: ${this.searchQuery}`;
+         status = "Press Enter to open editor";
       } else {
-         const selected = filteredOptions[this.selectedIndex];
-         if (!selected) {
-            md += "*No option selected*\n";
-         } else {
-            md += `## ${selected.title}\n\n`;
-            if (selected.description?.trim()) {
-               md += `${selected.description}\n`;
-            } else {
-               md += "*No additional details provided for this option.*\n";
-            }
-            md += `\n---\n\nPress \`Enter\` to select this option.\n`;
-            if (this.searchQuery) {
-               md += `\n> Filter: \`${this.searchQuery}\`\n`;
-            }
-         }
+         title = selected?.title ?? "No option selected";
+         detail = selected?.description?.trim() || "No additional details provided for this option.";
+         status = "Press Enter to select";
       }
-
-      let lines: string[];
-      if (mdTheme) {
-         const mdComponent = new Markdown(md.trim(), 0, 0, mdTheme);
-         lines = mdComponent.render(width);
-      } else {
-         lines = [];
-         for (const line of wrapTextWithAnsi(md.trim(), Math.max(10, width))) {
-            lines.push(truncateToWidth(line, width, ""));
-         }
-      }
-
-      while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
-         lines.pop();
-      }
-
-      if (lines.length <= maxLines) return lines;
-      if (maxLines === 1) return [truncateToWidth(this.theme.fg("dim", "…"), width, "")];
-
-      const visibleLines = lines.slice(0, maxLines - 1);
-      visibleLines.push(truncateToWidth(this.theme.fg("dim", "…"), width, ""));
-      return visibleLines;
+      const preview = renderUniversalPreviewPane({
+         width, maxRows: maxLines, title, detail,
+         position: this.selectedIndex + 1, count, status,
+         scrollOffset: this.previewScrollOffset, theme: this.theme,
+      });
+      this.previewScrollOffset = preview.offset;
+      this.previewTotalLines = preview.totalLines;
+      this.previewViewportRows = preview.viewportRows;
+      return preview.lines;
    }
 
    /** Enter on the selected row: toggle the comment, open the custom response, or choose the option. */
@@ -1135,6 +1429,7 @@ class WrappedSingleSelectList implements Component {
    }
 
    handleInput(data: string): void {
+      if (this.handlePreviewKeys(data)) return;
       if (this.searchQuery && matchesKey(data, Key.escape)) {
          this.setSearchQuery("");
          return;
@@ -1209,8 +1504,11 @@ class WrappedSingleSelectList implements Component {
       let lines: string[];
 
       if (!splitPane) {
+         this.previewActive = false;
          lines = this.buildListLines(width, filteredOptions);
       } else {
+         this.previewActive = true;
+         this.previewLeftWidth = splitPane.left;
          const listLines = this.buildListLines(splitPane.left, filteredOptions, true);
          const previewLines = this.buildPreviewLines(splitPane.right, filteredOptions, this.maxVisibleRows);
          const rowCount = Math.min(this.maxVisibleRows, Math.max(listLines.length, previewLines.length));
@@ -1250,6 +1548,9 @@ class AskComponent extends Container {
 
    private mode: AskMode = "select";
    private pendingSelections: string[] = [];
+   private pendingSelectedIds?: number[];
+   private pendingCombinedText = "";
+   private preselectedIds: number[] = [];
    private freeformDraft = "";
    private commentDraft = "";
    private promptScrollOffset = 0;
@@ -1302,6 +1603,7 @@ class AskComponent extends Container {
       keybindings: KeybindingsManager,
       shortcuts: ResolvedAskShortcuts,
       onDone: (result: AskUIResult | null) => void,
+      preselectedIds: number[] = [],
    ) {
       super();
 
@@ -1319,6 +1621,7 @@ class AskComponent extends Container {
       this.keybindings = keybindings;
       this.shortcuts = shortcuts;
       this.onDone = onDone;
+      this.preselectedIds = preselectedIds;
 
       // Layout skeleton
       this.addChild(new BoxBorderTop(
@@ -1381,7 +1684,7 @@ class AskComponent extends Container {
    override render(width: number): string[] {
       const innerWidth = Math.max(1, width - BOX_BORDER_OVERHEAD);
 
-      if (this.displayMode === "overlay") {
+      if (this.displayMode === "overlay" || this.displayMode === "adaptive" || this.displayMode === "fullscreen") {
          return this.renderOverlayLayout(width, innerWidth);
       }
 
@@ -1409,8 +1712,16 @@ class AskComponent extends Container {
    }
 
    private getOverlayMaxRenderLines(): number {
-      const rows = Number.isFinite(this.tui.terminal.rows) ? Math.floor(this.tui.terminal.rows) : 24;
+      const rows = Number.isFinite(this.tui.terminal.rows) ? Math.max(1, Math.floor(this.tui.terminal.rows)) : 24;
+      if (this.displayMode === "fullscreen") return rows;
+      if (this.displayMode === "adaptive") return Math.max(1, Math.min(rows - 2, Math.floor(rows * 0.65)));
       return getOverlayMaxRenderLinesForRows(rows);
+   }
+   /** Switch a live overlay without recreating the list/selection component. */
+   public setDisplayMode(mode: AskDisplayMode): void {
+      this.displayMode = mode;
+      this.invalidate();
+      this.tui.requestRender();
    }
 
    private renderOverlayLayout(width: number, innerWidth: number): string[] {
@@ -1455,7 +1766,7 @@ class AskComponent extends Container {
             modeBudget = Math.max(modeMinRows, modeBudget);
             promptBudget = promptAndModeRows - modeBudget;
 
-            const usefulPromptTarget = this.contextIsCollapsible && !this.contextExpanded ? 3 : 2;
+            const usefulPromptTarget = this.displayMode === "fullscreen" || this.displayMode === "adaptive" ? Math.min(5, promptLines.length) : this.contextIsCollapsible && !this.contextExpanded ? 3 : 2;
             const usefulPromptRows = Math.min(
                promptLines.length,
                promptAndModeRows >= modeMinRows + usefulPromptTarget ? usefulPromptTarget : promptMinRows,
@@ -1490,6 +1801,13 @@ class AskComponent extends Container {
          ...helpLines,
       ];
 
+      if (this.displayMode === "fullscreen" || this.displayMode === "adaptive") {
+         const fitted = bodyLines.slice(0, bodyCapacity);
+         // Keep keyboard hints at the bottom when the list is short.
+         const helpCount = Math.min(helpLines.length, fitted.length);
+         fitted.splice(fitted.length - helpCount, 0, ...Array(Math.max(0, bodyCapacity - fitted.length)).fill(""));
+         return this.frameBodyLines(fitted, width, innerWidth);
+      }
       return this.frameBodyLines(bodyLines.slice(0, bodyCapacity), width, innerWidth);
    }
 
@@ -1568,6 +1886,10 @@ class AskComponent extends Container {
    }
 
    private getPreferredModeRows(): number {
+      if (this.displayMode === "fullscreen" || this.displayMode === "adaptive") {
+         const rows = Number.isFinite(this.tui.terminal.rows) ? Math.max(1, Math.floor(this.tui.terminal.rows)) : 24;
+         return rows; // The actual mode budget is clipped by the prompt/help constraints above.
+      }
       if (this.mode === "freeform") return 10;
       if (this.mode === "comment") return 11;
       return 8;
@@ -1774,10 +2096,10 @@ class AskComponent extends Container {
 
    private updateHelpText(): void {
       const theme = this.theme;
-      const overlayHint = this.displayMode === "overlay" && !this.shortcuts.overlayToggle.disabled
+      const overlayHint = this.displayMode !== "inline" && !this.shortcuts.overlayToggle.disabled
          ? literalHint(theme, this.shortcuts.overlayToggle.spec, "hide")
          : null;
-      const promptScrollHint = this.displayMode === "overlay" || this.contextExpanded
+      const promptScrollHint = this.displayMode !== "inline" || this.contextExpanded
          ? literalHint(theme, "PgUp/PgDn", "prompt")
          : null;
       const commentHint = this.allowComment && !this.shortcuts.commentToggle.disabled
@@ -1938,7 +2260,11 @@ class AskComponent extends Container {
          this.keybindings,
          this.shortcuts.commentToggle,
       );
-      list.onSubmit = (result) => this.handleSelectionSubmit([result], list.isCommentEnabled());
+      list.preselect(this.preselectedIds);
+      list.onSubmit = (result) => {
+         const index = list.selectedOptionIndex();
+         this.handleSelectionSubmit([result], list.isCommentEnabled(), index === undefined ? undefined : selectedIdsForIndices(this.options, [index]));
+      };
       list.onCancel = () => this.onDone(null);
       list.onEnterFreeform = () => this.showFreeformMode();
 
@@ -1954,11 +2280,14 @@ class AskComponent extends Container {
          this.allowFreeform,
          this.allowComment,
          this.theme,
+         this.singleSelectLayout,
          this.keybindings,
          this.shortcuts.commentToggle,
       );
       list.onCancel = () => this.onDone(null);
-      list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled());
+      list.preselect(this.preselectedIds);
+      list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled(),
+         selectedIdsForIndices(this.options, list.selectedOptionIndices()));
       list.onEnterFreeform = () => this.showFreeformMode();
 
       this.multiSelectList = list;
@@ -1997,26 +2326,47 @@ class AskComponent extends Container {
       }
    }
 
-   private handleSelectionSubmit(selections: string[], wantsComment: boolean): void {
+   private handleSelectionSubmit(selections: string[], wantsComment: boolean, selectedIds?: number[]): void {
+      const custom = this.allowMultiple && this.allowFreeform ? this.freeformDraft.trim() : "";
       if (this.allowComment && wantsComment) {
          this.pendingSelections = selections;
+         this.pendingSelectedIds = selectedIds;
+         this.pendingCombinedText = custom;
          this.commentDraft = "";
          this.showCommentMode();
          return;
       }
 
-      this.onDone(createSelectionResponse(selections));
+      this.onDone(custom ? createCombinedResponse(selections, custom, selectedIds) : createSelectionResponse(selections, undefined, selectedIds));
    }
 
    private handleEditorSubmit(text: string): void {
       if (this.mode === "freeform") {
-         this.onDone(createFreeformResponse(text));
+         this.freeformDraft = text;
+         if (this.allowMultiple && this.allowFreeform && this.options.length) {
+            const indices = this.ensureMultiSelectList().selectedOptionIndices(true);
+            const selections = indices.map((index) => this.options[index]!.title);
+            const ids = selectedIdsForIndices(this.options, indices);
+            if (this.allowComment && this.ensureMultiSelectList().isCommentEnabled() && selections.length) {
+               this.pendingSelections = selections;
+               this.pendingSelectedIds = ids;
+               this.pendingCombinedText = text;
+               this.commentDraft = "";
+               this.showCommentMode();
+               return;
+            }
+            this.onDone(createCombinedResponse(selections, text, ids));
+         } else {
+            this.onDone(createFreeformResponse(text));
+         }
          return;
       }
 
       if (this.mode === "comment") {
          this.commentDraft = text;
-         this.onDone(createSelectionResponse(this.pendingSelections, text));
+         this.onDone(this.pendingCombinedText
+            ? createCombinedResponse(this.pendingSelections, this.pendingCombinedText, this.pendingSelectedIds, text)
+            : createSelectionResponse(this.pendingSelections, text, this.pendingSelectedIds));
       }
    }
 
@@ -2094,7 +2444,7 @@ class AskComponent extends Container {
    }
 
    private setPromptScrollOffset(nextOffset: number): boolean {
-      if (this.displayMode !== "overlay" && !this.contextExpanded) return false;
+      if (this.displayMode === "inline" && !this.contextExpanded) return false;
       if (this.promptMaxScrollOffset <= 0) return false;
       const clamped = Math.max(0, Math.min(Math.floor(nextOffset), this.promptMaxScrollOffset));
       const changed = clamped !== this.promptScrollOffset;
@@ -2103,7 +2453,7 @@ class AskComponent extends Container {
    }
 
    private handlePromptScrollInput(data: string): boolean {
-      if (this.displayMode !== "overlay" && !this.contextExpanded) return false;
+      if (this.displayMode === "inline" && !this.contextExpanded) return false;
       if (this.promptMaxScrollOffset <= 0) return false;
       // Prompt scrolling is select-mode only: in freeform/comment modes the
       // editor owns PageUp/PageDown (tui.editor.pageUp/pageDown) for paging
@@ -2139,6 +2489,13 @@ class AskComponent extends Container {
 
    handleInput(data: string): void {
       if (matchesKey(data, this.getContextToggleKey() as any) && this.toggleContext()) {
+         return;
+      }
+      // Multi-select preview uses PageUp/PageDown; prompt still uses Ctrl+U/D.
+      if (this.mode === "select" && (this.allowMultiple
+         ? this.multiSelectList?.handlePreviewKeys(data)
+         : this.singleSelectList?.handlePreviewKeys(data))) {
+         this.tui.requestRender();
          return;
       }
       if (this.handlePromptScrollInput(data)) {
@@ -2237,6 +2594,7 @@ class BatchAskComponent implements Component {
          keybindings,
          settings.shortcuts,
          (result) => this.handlePageDone(index, result),
+         entry.preselectedIds,
       ));
       this.updateChrome();
    }
@@ -2248,6 +2606,12 @@ class BatchAskComponent implements Component {
       this._focused = value;
       const page = this.pages[this.current];
       if (page) page.focused = value;
+   }
+
+   public setDisplayMode(mode: AskDisplayMode): void {
+      this.settings.displayMode = mode;
+      for (const page of this.pages) page.setDisplayMode(mode);
+      this.tui.requestRender();
    }
 
    invalidate(): void {
@@ -2429,7 +2793,7 @@ class BatchAskComponent implements Component {
          keybindingHint(theme, this.keybindings, "tui.select.confirm", unanswered > 0 ? "submit with skips" : "submit"),
          literalHint(theme, this.questions.length > 1 ? `1-${this.questions.length}` : "1", "edit"),
          literalHint(theme, "tab/shift+tab", "questions"),
-         this.settings.displayMode === "overlay" && !overlayToggle.disabled
+         this.settings.displayMode !== "inline" && !overlayToggle.disabled
             ? literalHint(theme, overlayToggle.spec, "hide")
             : null,
          keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
@@ -2463,13 +2827,20 @@ class BatchAskComponent implements Component {
          if (hiddenAbove) visibleContent[0] = marker("↑", visibleContent[0]!);
          if (hiddenBelow) visibleContent[last] = marker("↓", visibleContent[last]!);
       }
-      return frameBox(theme, this.title, [...visibleContent, ...footerLines], width);
+      const reviewBody = [...visibleContent, ...footerLines];
+       if (this.settings.displayMode === "fullscreen" || this.settings.displayMode === "adaptive") {
+          const spacer = Math.max(0, bodyCapacity - reviewBody.length);
+          reviewBody.splice(visibleContent.length, 0, ...Array(spacer).fill(""));
+       }
+       return frameBox(theme, this.title, reviewBody, width);
    }
 
    /** Rows the review page may use, borders included. */
    private reviewLineCap(): number {
       const rows = Number.isFinite(this.tui.terminal.rows) ? Math.floor(this.tui.terminal.rows) : 24;
       const overlayCap = getOverlayMaxRenderLinesForRows(rows);
+      if (this.settings.displayMode === "fullscreen") return Math.max(1, rows);
+      if (this.settings.displayMode === "adaptive") return Math.max(1, Math.min(rows - 2, Math.floor(rows * 0.65)));
       if (this.settings.displayMode === "overlay") return overlayCap;
       // Inline prompts sit in Pi's fullscreen input dock, which clips anything
       // taller than what remains after the transcript's minimum row, the
@@ -2509,6 +2880,7 @@ async function askViaDialogs(
    allowComment: boolean,
    dialogOpts?: DialogOptions,
    deadline?: number,
+   preselectedIds: number[] = [],
 ): Promise<AskUIResult | null> {
    if (dialogOpts?.signal?.aborted) return null;
    const prompt = context ? `${question}\n\nContext:\n${context}` : question;
@@ -2524,11 +2896,29 @@ async function askViaDialogs(
       ) as string | undefined;
       if (dialogOpts?.signal?.aborted || isCancelledInput(rawSelections)) return null;
 
-      const selections = parseDialogSelections(rawSelections);
-      if (selections.length === 0) return null;
-
-      if (!allowComment) {
-         return createSelectionResponse(selections);
+      const tokens = parseDialogSelections(rawSelections);
+      const chosen = tokens.length ? tokens.map((token) => {
+         if (/^[0-9]+$/.test(token)) return Number(token);
+         const matching = options.flatMap((option, index) => option.title === token ? [index + 1] : []);
+         if (matching.length !== 1) throw new Error(`Ambiguous or unknown selection: ${token}; enter option numbers.`);
+         return matching[0]!;
+      }) : preselectedIds.map((id) => options.findIndex((o) => (o as IdentifiedOption).id === id) + 1);
+      if (chosen.some((index) => !Number.isSafeInteger(index) || index < 1 || index > options.length) || new Set(chosen).size !== chosen.length) {
+         throw new Error("Enter distinct option numbers separated by commas.");
+      }
+      const selections = chosen.map((number) => options[number - 1]!.title);
+      const selectedIds = selectedIdsForIndices(options, chosen.map((number) => number - 1));
+      let extra = "";
+      if (allowFreeform) {
+         const freeformOpts = dialogStageOptions(dialogOpts, deadline);
+         if (freeformOpts === null) return null;
+         const answer = await ui.input(prompt, "Optional additional custom text (Enter to skip)...", freeformOpts) as string | undefined;
+         if (dialogOpts?.signal?.aborted || isCancelledInput(answer)) return null;
+         extra = answer ?? "";
+      }
+      if (!selections.length && !extra.trim()) return null;
+      if (!allowComment || selections.length === 0) {
+         return createCombinedResponse(selections, extra, selectedIds);
       }
 
       const commentOpts = dialogStageOptions(dialogOpts, deadline);
@@ -2539,10 +2929,10 @@ async function askViaDialogs(
          commentOpts,
       ) as string | undefined;
       if (dialogOpts?.signal?.aborted || isCancelledInput(comment)) return null;
-      return createSelectionResponse(selections, comment);
+      return createCombinedResponse(selections, extra, selectedIds, comment);
    }
 
-   const selectOptions = options.map((o) => o.title);
+   const selectOptions = options.map((o, index) => `${index + 1}. ${o.title}`);
    if (allowFreeform) selectOptions.push(FREEFORM_SENTINEL);
 
    const selectOpts = dialogStageOptions(dialogOpts, deadline);
@@ -2558,19 +2948,23 @@ async function askViaDialogs(
       return createFreeformResponse(answer);
    }
 
+   const chosenIndex = selectOptions.indexOf(selected);
+   if (chosenIndex < 0 || chosenIndex >= options.length) throw new Error("Invalid selected option");
+   const chosenTitle = options[chosenIndex]!.title;
+   const chosenIds = selectedIdsForIndices(options, [chosenIndex]);
    if (!allowComment) {
-      return createSelectionResponse([selected]);
+      return createSelectionResponse([chosenTitle], undefined, chosenIds);
    }
 
    const commentOpts = dialogStageOptions(dialogOpts, deadline);
    if (commentOpts === null) return null;
    const comment = await ui.input(
-      buildCommentPrompt(prompt, [selected]),
+      buildCommentPrompt(prompt, [chosenTitle]),
       "Optional comment (press Enter to skip)...",
       commentOpts,
    ) as string | undefined;
    if (dialogOpts?.signal?.aborted || isCancelledInput(comment)) return null;
-   return createSelectionResponse([selected], comment);
+   return createSelectionResponse([chosenTitle], comment, chosenIds);
 }
 
 /**
@@ -2611,6 +3005,7 @@ async function askBatchViaDialogs(
             allowComment,
             dialogOpts,
             deadline,
+            entry.preselectedIds,
          );
       }
       if (!response) return null;
@@ -2633,7 +3028,7 @@ function resolvePromptSettings(params: AskParams): PromptSettings {
    const settings = loadAskUserSettings();
    const envMode = process.env.PI_ASK_USER_DISPLAY_MODE?.trim().toLowerCase();
    const envDisplayMode: AskDisplayMode | undefined =
-      envMode === "overlay" || envMode === "inline" ? envMode : undefined;
+      envMode === "overlay" || envMode === "inline" || envMode === "adaptive" || envMode === "fullscreen" ? envMode : undefined;
    const envSingleSelectLayout = process.env.PI_ASK_USER_SINGLE_SELECT_LAYOUT?.trim().toLowerCase();
    return {
       displayMode: params.displayMode ?? envDisplayMode ?? settings.displayMode ?? "overlay",
@@ -2705,6 +3100,11 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
    let onCustomAbort: (() => void) | undefined;
    let customCompleted = false;
    let hasAnnouncedHide = false;
+   let activeComponent: Component | undefined;
+   let activeTui: TUI | undefined;
+   let currentDisplayMode: AskDisplayMode = displayMode;
+   const initialDisplayMode: AskDisplayMode = displayMode === "fullscreen" ? "adaptive" : displayMode;
+   const overlayOptions = buildCustomUIOptions(displayMode, (handle) => { overlayHandle = handle; });
    try {
       const customFactory = (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done: (result: T | null) => void) => {
          const complete = (value: T | null) => {
@@ -2723,7 +3123,9 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
             customTimer = setTimeout(() => complete(null), timeout);
          }
 
-         return request.createComponent(tui, theme, keybindings, complete);
+         activeTui = tui;
+         activeComponent = request.createComponent(tui, theme, keybindings, complete);
+         return activeComponent;
       };
 
       // Register a raw terminal input listener for the overlay-toggle key so the
@@ -2731,7 +3133,7 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
       // receive input). Inline mode does not need this because the prompt is
       // already non-modal. Skipped entirely if the user disabled the shortcut.
       if (
-         displayMode === "overlay"
+         displayMode !== "inline"
          && !overlayToggle.disabled
          && typeof ui.onTerminalInput === "function"
       ) {
@@ -2753,12 +3155,31 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
          });
       }
 
-      const customResult = signal?.aborted ? null : await ui.custom<T | null>(
-         customFactory,
-         buildCustomUIOptions(displayMode, (handle) => {
-            overlayHandle = handle;
-         }),
-      );
+      // Alt+Shift+F: toggle full-screen on an already mounted overlay.
+      // Native inline custom UI has no overlay to resize, so it is unchanged.
+      let removeFullscreenInputListener: (() => void) | undefined;
+      if (displayMode !== "inline" && typeof ui.onTerminalInput === "function") {
+         removeFullscreenInputListener = ui.onTerminalInput((data) => {
+            if (!matchesKey(data, "alt+shift+f" as any) || !activeTui || !overlayOptions?.overlayOptions) return undefined;
+            if (isKeyRepeat(data) || isKeyRelease(data)) return { consume: true };
+            currentDisplayMode = currentDisplayMode === "fullscreen" ? initialDisplayMode : "fullscreen";
+            const bounds = overlayOptions.overlayOptions;
+            bounds.width = currentDisplayMode === "fullscreen" ? "100%" : ASK_OVERLAY_WIDTH;
+            bounds.minWidth = currentDisplayMode === "fullscreen" ? 1 : ASK_OVERLAY_MIN_WIDTH;
+            bounds.maxHeight = currentDisplayMode === "fullscreen" ? "100%" : currentDisplayMode === "adaptive" ? "65%" : "85%";
+            bounds.margin = currentDisplayMode === "fullscreen" ? 0 : 1;
+            const component = activeComponent as (Component & { setDisplayMode?: (mode: AskDisplayMode) => void }) | undefined;
+            component?.setDisplayMode?.(currentDisplayMode);
+            activeTui.requestRender();
+            return { consume: true };
+         });
+      }
+      let customResult: T | null | undefined;
+      try {
+         customResult = signal?.aborted ? null : await ui.custom<T | null>(customFactory, overlayOptions);
+      } finally {
+         removeFullscreenInputListener?.();
+      }
 
       if (signal?.aborted) return null;
       if (customResult !== undefined) return customResult;
@@ -2814,7 +3235,7 @@ function normalizeBatchQuestions(params: AskParams): BatchQuestion[] {
 
       const rawOptions = entry.options ?? [];
       if (!Array.isArray(rawOptions)) throw new Error(`${label}.options must be an array.`);
-      const options = rawOptions.map(coerceOption).filter((option): option is QuestionOption => option !== null);
+      const { options, preselectedIds } = normalizeIdentifiedOptions(rawOptions, entry.preselectedIds, entry.allowMultiple ?? false, label);
       if (rawOptions.length > 0 && options.length === 0) {
          throw new Error(
             `All ${rawOptions.length} option(s) in ${label} were malformed, so nothing could be shown to the user. `
@@ -2829,6 +3250,7 @@ function normalizeBatchQuestions(params: AskParams): BatchQuestion[] {
          options,
          allowMultiple: entry.allowMultiple ?? false,
          allowFreeform: entry.allowFreeform ?? true,
+         preselectedIds,
       };
    });
 }
@@ -2982,15 +3404,20 @@ async function executeBatch(
 function formatOptionMarkers(
    theme: Theme,
    options: QuestionOption[],
-   response: Extract<AskResponse, { kind: "selection" }>,
+   response: Extract<AskResponse, { kind: "selection" | "combined" }>,
    indent = "",
 ): string {
    const selectedTitles = new Set(response.selections);
+   const selectedIds = response.selectedIds ? new Set(response.selectedIds) : null;
    let text = `\n${indent}` + theme.fg("dim", "Options:");
    for (const opt of options) {
       const desc = opt.description ? ` — ${opt.description}` : "";
-      const marker = selectedTitles.has(opt.title) ? theme.fg("success", "●") : theme.fg("dim", "○");
+      const chosen = selectedIds ? selectedIds.has((opt as IdentifiedOption).id as number) : selectedTitles.has(opt.title);
+      const marker = chosen ? theme.fg("success", "●") : theme.fg("dim", "○");
       text += `\n${indent}  ${marker} ${theme.fg("dim", opt.title)}${theme.fg("dim", desc)}`;
+   }
+   if (response.kind === "combined") {
+      text += `\n${indent}${theme.fg("dim", "Custom:")} ${theme.fg("dim", response.text)}`;
    }
    if (response.comment) {
       text += `\n${indent}${theme.fg("dim", "Comment:")} ${theme.fg("dim", response.comment)}`;
@@ -3033,6 +3460,7 @@ export default function(pi: ExtensionAPI) {
    // and produce empty options. Plain strings are still accepted at
    // runtime for older transcripts. See issue #22.
    const optionSchema = Type.Object({
+      id: Type.Optional(Type.Integer({ minimum: 1, description: "Unique positive integer option ID; required on every option when using preselectedIds" })),
       title: Type.String({ description: "Short title for this option" }),
       description: Type.Optional(
          Type.String({ description: "Longer description explaining this option" }),
@@ -3082,6 +3510,8 @@ export default function(pi: ExtensionAPI) {
                   allowFreeform: Type.Optional(
                      Type.Boolean({ description: "Add a freeform text option. Default: true" }),
                   ),
+                  preselectedIds: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }),
+                     { description: "Initial checked option IDs for this batch question; at most one in single-select" })),
                }),
                {
                   minItems: BATCH_MIN_QUESTIONS,
@@ -3104,12 +3534,14 @@ export default function(pi: ExtensionAPI) {
          allowFreeform: Type.Optional(
             Type.Boolean({ description: "Add a freeform text option. Default: true" }),
          ),
+         preselectedIds: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }),
+            { description: "IDs of options to preselect; requires numeric IDs on all options" })),
          allowComment: Type.Optional(
             Type.Boolean({ description: "Collect an optional comment after selecting one or more options. Default: PI_ASK_USER_ALLOW_COMMENT env var or allowComment in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR) if set, otherwise false." }),
          ),
          displayMode: Type.Optional(
-            StringEnum(["overlay", "inline"] as const, {
-               description: "UI rendering mode. 'overlay' shows a centered modal, 'inline' renders in-place. Default: PI_ASK_USER_DISPLAY_MODE env var, then displayMode in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'overlay'. Omit to respect the user's configured preference.",
+            StringEnum(["overlay", "inline", "adaptive", "fullscreen"] as const, {
+               description: "UI rendering mode. 'overlay' shows a centered modal, 'inline' renders in-place, 'adaptive' uses 65% terminal height, 'fullscreen' fills the terminal. Default: PI_ASK_USER_DISPLAY_MODE env var, then displayMode in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'overlay'. Omit to respect the user's configured preference.",
             }),
          ),
          singleSelectLayout: Type.Optional(
@@ -3173,7 +3605,7 @@ export default function(pi: ExtensionAPI) {
          } = params as AskParams;
          const settings = resolvePromptSettings(params as AskParams);
          const { allowComment } = settings;
-         const options = rawOptions.map(coerceOption).filter((option): option is QuestionOption => option !== null);
+         const { options, preselectedIds } = normalizeIdentifiedOptions(rawOptions, (params as AskParams).preselectedIds, allowMultiple, "question");
          const normalizedContext = context?.trim() || undefined;
          const dialogOpts = signal
             ? (timeout ? { signal, timeout } : { signal })
@@ -3244,6 +3676,7 @@ export default function(pi: ExtensionAPI) {
                keybindings,
                settings.shortcuts,
                complete,
+               preselectedIds,
             ),
             fallback: () => askViaDialogs(
                ctx.ui,
@@ -3254,6 +3687,8 @@ export default function(pi: ExtensionAPI) {
                allowFreeform,
                allowComment,
                dialogOpts,
+               undefined,
+               preselectedIds,
             ),
          }));
 

@@ -9,7 +9,7 @@ import { join } from "node:path";
  * break the tool.
  */
 export interface AskUserSettings {
-   displayMode?: "overlay" | "inline";
+   displayMode?: "overlay" | "inline" | "adaptive" | "fullscreen";
    singleSelectLayout?: "auto" | "list";
    allowComment?: boolean;
    contextExpanded?: boolean;
@@ -62,7 +62,7 @@ export function loadAskUserSettings(filePath: string = getAskUserSettingsPath())
    const source = parsed as Record<string, unknown>;
 
    const settings: AskUserSettings = {};
-   if (source.displayMode === "overlay" || source.displayMode === "inline") {
+   if (source.displayMode === "overlay" || source.displayMode === "inline" || source.displayMode === "adaptive" || source.displayMode === "fullscreen") {
       settings.displayMode = source.displayMode;
    }
    if (source.singleSelectLayout === "auto" || source.singleSelectLayout === "list") {
