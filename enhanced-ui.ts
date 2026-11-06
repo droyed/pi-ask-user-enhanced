@@ -365,6 +365,8 @@ export interface ActionButton {
    label: string;
    key: string;
    primary?: boolean;
+   /** Drawn dim; still clickable, but the action does nothing until it's ready. */
+   disabled?: boolean;
 }
 
 /**
@@ -381,7 +383,9 @@ export function renderActionBar(theme: Theme, buttons: readonly ActionButton[], 
       const text = ` ${button.label} ${button.key} `;
       const cells = visibleWidth(text);
       if (col + cells > width) break;
-      const styled = button.primary
+      const styled = button.disabled
+         ? theme.fg("dim", `[${text.trim()}]`.padEnd(cells))
+         : button.primary
          ? theme.fg("accent", inverse(theme, theme.bold(text)))
          : secondary
             ? paintRow(theme.fg("text", text), cells, secondary)

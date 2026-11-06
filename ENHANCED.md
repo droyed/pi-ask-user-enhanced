@@ -4,7 +4,7 @@ This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) 0.17.2 by Enzo Lucch
 
 | | |
 |---|---|
-| Version | `0.17.2-enhanced.1.3.0` (shown at the bottom of every prompt) |
+| Version | `0.17.2-enhanced.1.4.0` (shown at the bottom of every prompt) |
 | Upstream base | pi-ask-user 0.17.2 |
 | Tested with | Pi 0.74.2, 1.0.2 and 1.5.0 |
 
@@ -98,6 +98,12 @@ The help line changes while the row is highlighted to show these keys. In Tern's
 
 Single-select is unchanged: custom text replaces the choice and submits.
 
+### Submitting a multi-select
+
+A multi-select question submits only what you ticked. With nothing ticked, Enter and the Submit button do nothing: the button is dimmed and the help line says "nothing ticked yet". Tick at least one option, or tick your own text, to submit. To answer with nothing, press Esc to cancel.
+
+Upstream sends the highlighted option when nothing is ticked, even though its box shows `[ ]`. Single-select is unchanged: Enter picks the highlighted option. Preselected options count as ticked, so a question that arrives with ticks can be submitted straight away.
+
 ### Numbered options
 
 Give every option a unique positive integer `id` to refer to options by number. Answers then include `selectedIds`, in the same order as `selections`. `preselectedIds` starts the prompt with options ticked (multi-select) or highlighted (single-select, one id at most).
@@ -160,6 +166,10 @@ type AskResponse =
 - Mouse support works in Pi 1.0.2 and 1.5.0. Pi 0.74 has no mouse input for extensions, so there everything works from the keyboard.
 
 ## Changelog
+
+### enhanced 1.4.0 (on upstream 0.17.2)
+
+- Multi-select no longer submits the highlighted option when nothing is ticked. Enter and Submit wait until something is ticked; the Submit button is dimmed and the help line says "nothing ticked yet". Single-select is unchanged.
 
 ### enhanced 1.3.0 (on upstream 0.17.2)
 

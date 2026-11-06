@@ -824,6 +824,11 @@ class MultiSelectList implements Component, ListMouseHost {
       return !!this.customText && this.customOn;
    }
 
+   /** True when Submit would send something: a ticked option, or ticked custom text (Fix 12). */
+   public hasAnswer(): boolean {
+      return this.checked.size > 0 || this.isCustomTextSent();
+   }
+
    /** For the help line: where the highlight is relative to the custom-text row. */
    public customRowState(): "off-row" | "empty" | "on" | "off" {
       if (!this.isFreeformRow(this.selectedIndex)) return "off-row";
@@ -995,9 +1000,10 @@ class MultiSelectList implements Component, ListMouseHost {
    }
 
    /**
-    * Submit the ticked options, or the highlighted one when none is ticked.
-    * Saved custom text goes along (the prompt adds it), so text alone also
-    * submits. With nothing at all to send, nothing happens.
+    * Submit the ticked options. Ticked custom text goes along (the prompt adds
+    * it), so text alone also submits. With nothing ticked, nothing happens:
+    * upstream sent the highlighted option instead, which the screen never
+    * showed as chosen (Fix 12). The help line says what's missing.
     */
    submit(): void {
       const selectedTitles = Array.from(this.checked)
@@ -1005,11 +1011,7 @@ class MultiSelectList implements Component, ListMouseHost {
          .map((i) => this.options[i]?.title)
          .filter((t): t is string => !!t);
 
-      const fallback = this.options[this.selectedIndex]?.title;
-      const sendsText = this.isCustomTextSent();
-      const result = selectedTitles.length > 0 ? selectedTitles : fallback && !sendsText ? [fallback] : [];
-
-      if (result.length > 0 || sendsText) this.onSubmit?.(result);
+      if (selectedTitles.length > 0 || this.isCustomTextSent()) this.onSubmit?.(selectedTitles);
    }
 
    /** The rows as shown (options with their ticks, comment toggle, custom text), for Tern's native sheet. */
@@ -1865,7 +1867,7 @@ class AskComponent extends Container {
    private customText = "";
    /** Whether the help line currently describes PgUp/PgDn as scrolling the preview (Fix 2). */
    private hintedOverflow = false;
-   /** The custom-text row state the help line was last written for (Fix 1a). */
+   /** The custom-text row state and readiness the help line was last written for (Fix 1a, Fix 12). */
    private hintedRowState = "";
    /** Inner width of the last frame, for layout-dependent minimum heights. */
    private layoutWidth = 0;
@@ -2014,8 +2016,8 @@ class AskComponent extends Container {
       // The custom-text row has its own key hints (Fix 1a), so the hint also
       // follows the highlight onto and off that row.
       const overflow = this.previewOverflows();
-      const rowState = this.mode === "select" && this.allowMultiple && this.usesCustomTextRow()
-         ? this.ensureMultiSelectList().customRowState()
+      const rowState = this.mode === "select" && this.allowMultiple
+         ? `${this.usesCustomTextRow() ? this.ensureMultiSelectList().customRowState() : ""}|${this.ensureMultiSelectList().hasAnswer()}`
          : "";
       if (overflow !== this.hintedOverflow || rowState !== this.hintedRowState) {
          this.hintedOverflow = overflow;
@@ -2285,7 +2287,9 @@ class AskComponent extends Container {
    private renderActionBarLine(width: number): { line: string; hits: HitRect[] } | undefined {
       const buttons: ActionButton[] = [];
       if (this.mode === "select") {
-         buttons.push({ id: "submit", label: this.allowMultiple ? "Submit" : "Select", key: "⏎", primary: true });
+         // Multi-select with nothing ticked can't submit yet (Fix 12): dim the button.
+         const disabled = this.allowMultiple && !this.ensureMultiSelectList().hasAnswer();
+         buttons.push({ id: "submit", label: this.allowMultiple ? "Submit" : "Select", key: "⏎", primary: !disabled, disabled });
          buttons.push({ id: "cancel", label: "Cancel", key: "esc" });
       } else if (this.mode === "freeform" && this.usesCustomTextRow()) {
          buttons.push({ id: "editor-submit", label: "Save", key: "⏎", primary: true });
@@ -2623,7 +2627,10 @@ class AskComponent extends Container {
 
       if (this.allowMultiple) {
          // On the custom-text row the keys mean something else (Fix 1a): say so.
-         const row = this.usesCustomTextRow() ? this.ensureMultiSelectList().customRowState() : "off-row";
+         const list = this.ensureMultiSelectList();
+         const row = this.usesCustomTextRow() ? list.customRowState() : "off-row";
+         // Nothing ticked: Enter does nothing, so say so instead of "enter submit" (Fix 12).
+         const ready = list.hasAnswer();
          const rowHints = row === "empty"
             ? [literalHint(theme, "space", "write your text")]
             : row === "on" || row === "off"
@@ -2632,11 +2639,12 @@ class AskComponent extends Container {
                   literalHint(theme, "e/→", "edit"),
                   literalHint(theme, "⌫", "remove"),
                   // Early, so it survives on narrow screens: Enter now submits from here.
-                  keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
+                  ready ? keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit") : null,
                ]
                : [literalHint(theme, "space", "toggle"), this.customText ? literalHint(theme, "⌫", "remove your text") : null];
          const hints = [
             this.navigationHint,
+            ready || row === "empty" ? null : "nothing ticked yet",
             literalHint(theme, "↑↓", "navigate"),
             ...rowHints,
             commentHint,
@@ -2644,7 +2652,9 @@ class AskComponent extends Container {
             promptScrollHint,
             overlayHint,
             fullscreenHint,
-            row === "on" || row === "off" ? null : keybindingHint(theme, this.keybindings, "tui.select.confirm", row === "empty" ? "write your text" : "submit"),
+            row === "on" || row === "off" || (!ready && row !== "empty")
+               ? null
+               : keybindingHint(theme, this.keybindings, "tui.select.confirm", row === "empty" ? "write your text" : "submit"),
             keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
          ]
             .filter((hint): hint is string => !!hint)

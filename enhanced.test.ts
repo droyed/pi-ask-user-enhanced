@@ -326,12 +326,12 @@ describe("Fix 1a: tick and untick your own text; Enter submits", () => {
       expect(result.details.cancelled).toBe(true); // still open when the test ends
    });
 
-   test("unticked text on an option row: the highlighted option is sent, as before", async () => {
+   test("unticked text and nothing ticked: Enter on an option row sends nothing either (Fix 12)", async () => {
       const { result } = await run(hardening, (s) => {
          saveText(s, "maybe later");
          s.keys(KEY.space, KEY.up, KEY.enter);
       });
-      expect(result.details.response).toEqual({ kind: "selection", selections: ["Input schema validation"] });
+      expect(result.details.cancelled).toBe(true); // still open when the test ends
    });
 
    test("the empty row still opens the editor on Space, Enter, e and →", async () => {
@@ -387,6 +387,76 @@ describe("Fix 1a: tick and untick your own text; Enter submits", () => {
       expect(unticked).toContain("[ ] ✎ “click me”");
       expect(editing).toContain("Your own text");
       expect(result.details.response).toEqual({ kind: "combined", selections: ["Rate limiting"], text: "click me" });
+   });
+});
+
+// ── Fix 12: multi-select never submits an option you didn't tick ────────────
+
+describe("Fix 12: nothing ticked, nothing submitted", () => {
+   test("Enter with nothing ticked does nothing, and the help line says why", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.enter);
+         shown = s.text();
+      });
+      expect(shown).toContain("nothing ticked yet");
+      expect(shown).not.toContain("enter submit");
+      expect(shown).toContain("[Submit ⏎]"); // dimmed button
+      expect(result.details.cancelled).toBe(true); // still open when the test ends
+   });
+
+   test("ticking an option makes Enter submit again", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.down, KEY.space);
+         shown = s.text();
+         s.keys(KEY.enter);
+      });
+      expect(shown).not.toContain("nothing ticked yet");
+      expect(shown).toContain("enter submit");
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Audit logging"] });
+   });
+
+   test("unticking everything again stops Enter from submitting", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space, KEY.space, KEY.enter);
+         shown = s.text();
+      });
+      expect(shown).toContain("nothing ticked yet");
+      expect(result.details.cancelled).toBe(true);
+   });
+
+   test("the Submit button does nothing until something is ticked", async () => {
+      const { result } = await run(hardening, (s) => {
+         s.click("Submit");
+         s.keys(KEY.down);
+         s.click("[ ] Input", 1);
+         s.click("Submit");
+      });
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Input schema validation"] });
+   });
+
+   test("ticked own text alone is enough to submit", async () => {
+      const { result } = await run(hardening, (s) => {
+         saveText(s, "none of these");
+         s.keys(KEY.enter);
+      });
+      expect(result.details.response).toEqual({ kind: "freeform", text: "none of these" });
+   });
+
+   test("preselected options can be submitted straight away", async () => {
+      const { result } = await run({
+         ...hardening,
+         options: hardening.options.map((option, index) => ({ ...option, id: index + 1 })),
+         preselectedIds: [2],
+      }, (s) => s.keys(KEY.enter));
+      expect(result.details.response).toMatchObject({ kind: "selection", selections: ["Audit logging"] });
+   });
+
+   test("single-select is unchanged: Enter picks the highlighted option", async () => {
+      const { result } = await run({ question: "Pick", options: ["A", "B"] }, (s) => s.keys(KEY.down, KEY.enter));
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["B"] });
    });
 });
 
@@ -766,6 +836,6 @@ describe("Fix 10: version", () => {
    test("the frame shows the enhanced version", async () => {
       let shown = "";
       await run({ question: "Pick", options: ["A"] }, (s) => (shown = s.text()));
-      expect(shown).toContain("v0.17.2-enhanced.1.3.0");
+      expect(shown).toContain("v0.17.2-enhanced.1.4.0");
    });
 });
