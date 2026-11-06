@@ -261,28 +261,42 @@ function coerceOption(option: unknown): QuestionOption | null {
 }
 
 
-/** Fail closed before opening a UI; allow legacy id-less questions unchanged. */
+/**
+ * Normalize options and validate numeric option IDs before any UI opens.
+ * Questions without IDs keep upstream behavior. Once any option carries an
+ * `id`, every option must have a unique positive integer ID, and
+ * `preselectedIds` must name existing IDs. An empty `preselectedIds` array is
+ * treated as absent: models often send `[]` for "nothing preselected".
+ */
 function normalizeIdentifiedOptions(
    rawOptions: unknown[], preselectedIds: unknown, allowMultiple: boolean, label: string,
 ): { options: QuestionOption[]; preselectedIds: number[] } {
-   const usesIds = preselectedIds !== undefined || rawOptions.some((o) => o !== null && typeof o === "object" && "id" in o);
+   const requested = Array.isArray(preselectedIds) && preselectedIds.length === 0 ? undefined : preselectedIds;
+   const usesIds = requested !== undefined || rawOptions.some((o) => o !== null && typeof o === "object" && "id" in o);
    const options = rawOptions.map(coerceOption).filter((o): o is QuestionOption => o !== null);
    if (!usesIds) return { options, preselectedIds: [] };
-   if (options.length !== rawOptions.length) throw new Error(`${label}.options has malformed entries; numeric-ID mode requires valid option objects.`);
+   const fix = "Give every option a unique positive integer id, or leave out id and preselectedIds entirely.";
+   if (options.length !== rawOptions.length) {
+      throw new Error(`${label}.options has malformed entries, and numbered options need every entry to be a valid option object. ${fix}`);
+   }
    const ids = new Set<number>();
    for (const [index, option] of options.entries()) {
       const id = (option as IdentifiedOption).id;
-      if (!Number.isSafeInteger(id) || (id as number) <= 0) throw new Error(`${label}.options[${index}].id must be a positive safe integer.`);
-      if (ids.has(id as number)) throw new Error(`${label}.options contains duplicate id ${id}.`);
+      if (!Number.isSafeInteger(id) || (id as number) <= 0) throw new Error(`${label}.options[${index}].id must be a positive integer. ${fix}`);
+      if (ids.has(id as number)) throw new Error(`${label}.options contains duplicate id ${id}. ${fix}`);
       ids.add(id as number);
    }
-   if (preselectedIds === undefined) return { options, preselectedIds: [] };
-   if (!Array.isArray(preselectedIds)) throw new Error(`${label}.preselectedIds must be an array of option IDs.`);
-   if (!allowMultiple && preselectedIds.length > 1) throw new Error(`${label}.preselectedIds permits at most one ID for single-select.`);
+   if (requested === undefined) return { options, preselectedIds: [] };
+   if (!Array.isArray(requested)) throw new Error(`${label}.preselectedIds must be an array of option ids, such as [2] or [1, 3].`);
+   if (!allowMultiple && requested.length > 1) {
+      throw new Error(`${label}.preselectedIds can name at most one id when allowMultiple is false.`);
+   }
    const seen = new Set<number>();
-   for (const id of preselectedIds) {
-      if (!Number.isSafeInteger(id) || !ids.has(id)) throw new Error(`${label}.preselectedIds includes unknown or invalid ID: ${id}.`);
-      if (seen.has(id)) throw new Error(`${label}.preselectedIds contains duplicate ID ${id}.`);
+   for (const id of requested) {
+      if (!Number.isSafeInteger(id) || !ids.has(id)) {
+         throw new Error(`${label}.preselectedIds includes ${JSON.stringify(id)}, which is not one of the option ids (${[...ids].join(", ")}).`);
+      }
+      if (seen.has(id)) throw new Error(`${label}.preselectedIds lists id ${id} twice.`);
       seen.add(id);
    }
    return { options, preselectedIds: [...seen] };
@@ -537,6 +551,7 @@ const SINGLE_SELECT_SPLIT_PANE_LEFT_MIN_WIDTH = 32;
 const SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH = 28;
 const SINGLE_SELECT_SPLIT_PANE_SEPARATOR = " │ ";
 const FREEFORM_SENTINEL = "\u270f\ufe0f Type custom response...";
+const FREEFORM_DIALOG_LABEL = "\u270f\ufe0f Type something (add your own text)";
 const COMMENT_TOGGLE_LABEL = "Add extra context after selection";
 const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
 const DEFAULT_COMMENT_TOGGLE_KEY = "ctrl+g";
@@ -2886,53 +2901,13 @@ async function askViaDialogs(
    const prompt = context ? `${question}\n\nContext:\n${context}` : question;
 
    if (allowMultiple) {
-      const optionList = formatOptionsForMessage(options);
-      const selectionOpts = dialogStageOptions(dialogOpts, deadline);
-      if (selectionOpts === null) return null;
-      const rawSelections = await ui.input(
-         `${prompt}\n\nOptions (select one or more):\n${optionList}`,
-         "Type your selection(s)...",
-         selectionOpts,
-      ) as string | undefined;
-      if (dialogOpts?.signal?.aborted || isCancelledInput(rawSelections)) return null;
-
-      const tokens = parseDialogSelections(rawSelections);
-      const chosen = tokens.length ? tokens.map((token) => {
-         if (/^[0-9]+$/.test(token)) return Number(token);
-         const matching = options.flatMap((option, index) => option.title === token ? [index + 1] : []);
-         if (matching.length !== 1) throw new Error(`Ambiguous or unknown selection: ${token}; enter option numbers.`);
-         return matching[0]!;
-      }) : preselectedIds.map((id) => options.findIndex((o) => (o as IdentifiedOption).id === id) + 1);
-      if (chosen.some((index) => !Number.isSafeInteger(index) || index < 1 || index > options.length) || new Set(chosen).size !== chosen.length) {
-         throw new Error("Enter distinct option numbers separated by commas.");
-      }
-      const selections = chosen.map((number) => options[number - 1]!.title);
-      const selectedIds = selectedIdsForIndices(options, chosen.map((number) => number - 1));
-      let extra = "";
-      if (allowFreeform) {
-         const freeformOpts = dialogStageOptions(dialogOpts, deadline);
-         if (freeformOpts === null) return null;
-         const answer = await ui.input(prompt, "Optional additional custom text (Enter to skip)...", freeformOpts) as string | undefined;
-         if (dialogOpts?.signal?.aborted || isCancelledInput(answer)) return null;
-         extra = answer ?? "";
-      }
-      if (!selections.length && !extra.trim()) return null;
-      if (!allowComment || selections.length === 0) {
-         return createCombinedResponse(selections, extra, selectedIds);
-      }
-
-      const commentOpts = dialogStageOptions(dialogOpts, deadline);
-      if (commentOpts === null) return null;
-      const comment = await ui.input(
-         buildCommentPrompt(prompt, selections),
-         "Optional comment (press Enter to skip)...",
-         commentOpts,
-      ) as string | undefined;
-      if (dialogOpts?.signal?.aborted || isCancelledInput(comment)) return null;
-      return createCombinedResponse(selections, extra, selectedIds, comment);
+      return askMultiViaDialogs(ui, prompt, options, allowFreeform, allowComment, dialogOpts, deadline, preselectedIds);
    }
 
-   const selectOptions = options.map((o, index) => `${index + 1}. ${o.title}`);
+   // Plain titles, as hosts and RPC clients expect. Only when two options share a
+   // title are the labels numbered, so the answer maps back to the right option.
+   const duplicateTitles = new Set(options.map((o) => o.title)).size !== options.length;
+   const selectOptions = options.map((o, index) => (duplicateTitles ? `${index + 1}. ${o.title}` : o.title));
    if (allowFreeform) selectOptions.push(FREEFORM_SENTINEL);
 
    const selectOpts = dialogStageOptions(dialogOpts, deadline);
@@ -2949,9 +2924,9 @@ async function askViaDialogs(
    }
 
    const chosenIndex = selectOptions.indexOf(selected);
-   if (chosenIndex < 0 || chosenIndex >= options.length) throw new Error("Invalid selected option");
-   const chosenTitle = options[chosenIndex]!.title;
-   const chosenIds = selectedIdsForIndices(options, [chosenIndex]);
+   // A host that returns something it was not offered still gets the upstream behavior: the text is the answer.
+   const chosenTitle = chosenIndex >= 0 && chosenIndex < options.length ? options[chosenIndex]!.title : selected;
+   const chosenIds = chosenIndex >= 0 && chosenIndex < options.length ? selectedIdsForIndices(options, [chosenIndex]) : undefined;
    if (!allowComment) {
       return createSelectionResponse([chosenTitle], undefined, chosenIds);
    }
@@ -2965,6 +2940,111 @@ async function askViaDialogs(
    ) as string | undefined;
    if (dialogOpts?.signal?.aborted || isCancelledInput(comment)) return null;
    return createSelectionResponse([chosenTitle], comment, chosenIds);
+}
+
+type MultiDialogParse =
+   | { ok: true; indices: number[]; custom: boolean }
+   | { ok: false; error: string };
+
+/** Read "2, 4" or "Red, Green" from the multi-select dialog. Option numbers always work; titles work when unique. */
+export function parseMultiDialogInput(raw: string, options: QuestionOption[], customNumber: number | undefined): MultiDialogParse {
+   const tokens = parseDialogSelections(raw);
+   const indices: number[] = [];
+   let custom = false;
+   const last = customNumber ?? options.length;
+   for (const token of tokens) {
+      let index: number | undefined;
+      if (/^\d+$/.test(token)) {
+         const n = Number(token);
+         if (customNumber !== undefined && n === customNumber) { custom = true; continue; }
+         if (n >= 1 && n <= options.length) index = n - 1;
+         else return { ok: false, error: `${token} isn't an option number. Use numbers 1–${last}.` };
+      } else {
+         let matches = options.flatMap((o, i) => (o.title === token ? [i] : []));
+         if (matches.length === 0) matches = options.flatMap((o, i) => (o.title.toLowerCase() === token.toLowerCase() ? [i] : []));
+         if (matches.length === 0) return { ok: false, error: `"${token}" isn't an option. Use numbers 1–${last}.` };
+         if (matches.length > 1) return { ok: false, error: `"${token}" matches more than one option. Use its number instead.` };
+         index = matches[0]!;
+      }
+      if (!indices.includes(index)) indices.push(index);
+   }
+   return { ok: true, indices, custom };
+}
+
+/**
+ * Multi-select in the dialog fallback. Options are numbered; when custom text is
+ * allowed, one more numbered entry ("Type something") opens a text box, and only
+ * then. Input that isn't a valid choice asks again, quoting what was typed,
+ * instead of failing the tool call. Every stage shares the caller's deadline.
+ */
+async function askMultiViaDialogs(
+   ui: { select: Function; input: Function },
+   prompt: string,
+   options: QuestionOption[],
+   allowFreeform: boolean,
+   allowComment: boolean,
+   dialogOpts: DialogOptions | undefined,
+   deadline: number | undefined,
+   preselectedIds: number[],
+): Promise<AskUIResult | null> {
+   const customNumber = allowFreeform ? options.length + 1 : undefined;
+   const optionList = formatOptionsForMessage(options) + (customNumber ? `\n${customNumber}. ${FREEFORM_DIALOG_LABEL}` : "");
+   const preselected = preselectedIds
+      .map((id) => options.findIndex((o) => (o as IdentifiedOption).id === id))
+      .filter((index) => index >= 0);
+   const keepHint = preselected.length
+      ? `\n\nAlready selected: ${preselected.map((i) => `${i + 1}. ${options[i]!.title}`).join(", ")}. Press Enter to keep them.`
+      : "";
+   let problem = "";
+   let chosen: { indices: number[]; custom: boolean };
+   for (;;) {
+      const selectionOpts = dialogStageOptions(dialogOpts, deadline);
+      if (selectionOpts === null) return null;
+      const raw = await ui.input(
+         `${problem ? `⚠ ${problem}\n\n` : ""}${prompt}\n\nOptions (select one or more):\n${optionList}${keepHint}`,
+         "Type your selection(s)...",
+         selectionOpts,
+      ) as string | undefined;
+      if (dialogOpts?.signal?.aborted || isCancelledInput(raw)) return null;
+      const parsed = parseMultiDialogInput(raw, options, customNumber);
+      if (!parsed.ok) {
+         problem = `You typed "${raw.trim()}". ${parsed.error}`;
+         continue;
+      }
+      if (parsed.indices.length === 0 && !parsed.custom) {
+         if (!preselected.length) return null;
+         chosen = { indices: preselected, custom: false };
+      } else {
+         chosen = parsed;
+      }
+      break;
+   }
+
+   const selections = chosen.indices.map((i) => options[i]!.title);
+   const selectedIds = selectedIdsForIndices(options, chosen.indices);
+   let text = "";
+   if (chosen.custom) {
+      const textOpts = dialogStageOptions(dialogOpts, deadline);
+      if (textOpts === null) return null;
+      const lead = selections.length ? `${prompt}\n\nSelected: ${selections.join(", ")}\nYour own text:` : `${prompt}\n\nYour own text:`;
+      const answer = await ui.input(lead, "Type your answer...", textOpts) as string | undefined;
+      if (dialogOpts?.signal?.aborted || isCancelledInput(answer)) return null;
+      text = answer ?? "";
+   }
+   if (!selections.length && !text.trim()) return null;
+   if (!allowComment || selections.length === 0) {
+      return createCombinedResponse(selections, text, selectedIds);
+   }
+
+   const commentOpts = dialogStageOptions(dialogOpts, deadline);
+   if (commentOpts === null) return null;
+   const comment = await ui.input(
+      buildCommentPrompt(prompt, selections),
+      "Optional comment (press Enter to skip)...",
+      commentOpts,
+   ) as string | undefined;
+   if (dialogOpts?.signal?.aborted || isCancelledInput(comment)) return null;
+   return createCombinedResponse(selections, text, selectedIds, comment);
 }
 
 /**
@@ -3460,7 +3540,7 @@ export default function(pi: ExtensionAPI) {
    // and produce empty options. Plain strings are still accepted at
    // runtime for older transcripts. See issue #22.
    const optionSchema = Type.Object({
-      id: Type.Optional(Type.Integer({ minimum: 1, description: "Unique positive integer option ID; required on every option when using preselectedIds" })),
+      id: Type.Optional(Type.Number({ minimum: 1, multipleOf: 1, description: "Unique positive integer option ID; required on every option when using preselectedIds" })),
       title: Type.String({ description: "Short title for this option" }),
       description: Type.Optional(
          Type.String({ description: "Longer description explaining this option" }),
@@ -3510,7 +3590,7 @@ export default function(pi: ExtensionAPI) {
                   allowFreeform: Type.Optional(
                      Type.Boolean({ description: "Add a freeform text option. Default: true" }),
                   ),
-                  preselectedIds: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }),
+                  preselectedIds: Type.Optional(Type.Array(Type.Number({ minimum: 1, multipleOf: 1 }),
                      { description: "Initial checked option IDs for this batch question; at most one in single-select" })),
                }),
                {
@@ -3534,7 +3614,7 @@ export default function(pi: ExtensionAPI) {
          allowFreeform: Type.Optional(
             Type.Boolean({ description: "Add a freeform text option. Default: true" }),
          ),
-         preselectedIds: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }),
+         preselectedIds: Type.Optional(Type.Array(Type.Number({ minimum: 1, multipleOf: 1 }),
             { description: "IDs of options to preselect; requires numeric IDs on all options" })),
          allowComment: Type.Optional(
             Type.Boolean({ description: "Collect an optional comment after selecting one or more options. Default: PI_ASK_USER_ALLOW_COMMENT env var or allowComment in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR) if set, otherwise false." }),
