@@ -330,11 +330,6 @@ export function hitAt(rects: readonly HitRect[], x: number, y: number): HitRect 
    return rects.find((rect) => y >= rect.row && y < rect.row + rect.rows && x >= rect.col && x < rect.col + rect.cols);
 }
 
-/** Shift rects into a parent's coordinates. */
-export function offsetRects(rects: readonly HitRect[], row: number, col: number): HitRect[] {
-   return rects.map((rect) => ({ ...rect, row: rect.row + row, col: rect.col + col }));
-}
-
 /** The offset that puts the thumb's top on `row` (rail-relative), for dragging. */
 export function offsetForThumbRow(row: number, railRows: number, thumbRows: number, maxOffset: number): number {
    const span = Math.max(1, railRows - thumbRows);

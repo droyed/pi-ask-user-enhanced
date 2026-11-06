@@ -68,7 +68,6 @@ import {
    type OptionLayout,
    hitAt,
    offsetForThumbRow,
-   offsetRects,
    paintRow,
    previewNeedRows,
    renderActionBar,
