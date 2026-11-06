@@ -65,6 +65,7 @@ import {
    PreviewScroll,
    blockSpan,
    chooseOptionLayout,
+   type OptionLayout,
    hitAt,
    offsetForThumbRow,
    offsetRects,
@@ -1040,6 +1041,13 @@ class MultiSelectList implements Component, ListMouseHost {
       return right >= SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH ? { left, right } : null;
    }
 
+   /** The layout at `width`; narrow widths keep the plain list when no option has a description to show. */
+   private layoutFor(width: number): OptionLayout {
+      const layout = chooseOptionLayout(width, this.layoutPreference, this.getSplitWidths(width) !== null);
+      if ((layout === "strip" || layout === "accordion") && !this.options.some((o) => o.description?.trim())) return "list";
+      return layout;
+   }
+
    private subjectFor(index: number): PreviewSubject {
       if (this.isCommentToggleRow(index)) {
          return {
@@ -1090,7 +1098,7 @@ class MultiSelectList implements Component, ListMouseHost {
                lines.push(`${prefix}   ${theme.fg("success", "[✓]")} ${theme.fg("accent", "✎")} ${text}${clear}`);
             } else {
                const label = theme.fg("text", theme.bold("Type something."));
-               lines.push(`${prefix}   ${theme.fg("dim", "[ ]")} ${label} ${theme.fg("dim", "—")} ${theme.fg("muted", "Enter a custom response")}`);
+               lines.push(`${prefix}   ${theme.fg("dim", "[ ]")} ${theme.fg("accent", "✎")} ${label} ${theme.fg("muted", "your own text")}`);
             }
          } else {
             const option = this.options[i]!;
@@ -1147,7 +1155,7 @@ class MultiSelectList implements Component, ListMouseHost {
       if (cached !== undefined) return cached;
       const mdTheme = safeMarkdownTheme();
       const panes = this.getSplitWidths(width);
-      const layout = chooseOptionLayout(width, this.layoutPreference, panes !== null);
+      const layout = this.layoutFor(width);
       const subjects = Array.from({ length: this.getItemCount() }, (_, i) => this.subjectFor(i));
       const docRows = (w: number, titleRow = true) => Math.max(...subjects.map((s) => previewNeedRows(this.theme, s, w, { mdTheme, titleRow })));
       let need: number;
@@ -1165,6 +1173,13 @@ class MultiSelectList implements Component, ListMouseHost {
       return need;
    }
 
+   /** Fewest rows worth showing: the strip and accordion need room for a few options and some text. */
+   minimumRows(width: number): number {
+      const layout = this.layoutFor(width);
+      const floor = layout === "strip" ? 7 : layout === "accordion" ? 6 : 3;
+      return Math.min(floor, this.preferredRows(width));
+   }
+
    render(width: number): string[] {
       if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
       const theme = this.theme;
@@ -1175,7 +1190,7 @@ class MultiSelectList implements Component, ListMouseHost {
       const mdTheme = safeMarkdownTheme();
       const { panel } = listColors(theme);
       const panes = this.getSplitWidths(width);
-      const layout = chooseOptionLayout(width, this.layoutPreference, panes !== null);
+      const layout = this.layoutFor(width);
       // Stable height: what the tallest option needs, within the space the prompt gives (Fix 8).
       const rows = Math.max(1, Math.min(this.maxVisibleRows, this.preferredRows(width)));
       const subject = this.subjectFor(this.selectedIndex);
@@ -1468,6 +1483,13 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
       return { lines: lines.slice(0, maxRows), items: items.slice(0, maxRows) };
    }
 
+   /** The layout at `width`; narrow widths keep the plain list when no option has a description to show. */
+   private layoutFor(width: number): OptionLayout {
+      const layout = chooseOptionLayout(width, this.singleSelectLayout, this.getSplitPaneWidths(width) !== null);
+      if ((layout === "strip" || layout === "accordion") && !this.options.some((o) => o.description?.trim())) return "list";
+      return layout;
+   }
+
    private subjectFor(index: number, filteredOptions: QuestionOption[]): PreviewSubject {
       if (this.isCommentToggleRow(index, filteredOptions)) {
          return {
@@ -1495,7 +1517,7 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
       const mdTheme = safeMarkdownTheme();
       const all = this.options;
       const panes = this.getSplitPaneWidths(width);
-      const layout = chooseOptionLayout(width, this.singleSelectLayout, panes !== null);
+      const layout = this.layoutFor(width);
       const subjects = Array.from({ length: this.getItemCount(all) }, (_, i) => this.subjectFor(i, all));
       const docRows = (w: number, titleRow = true) => Math.max(...subjects.map((s) => previewNeedRows(this.theme, s, w, { mdTheme, titleRow })));
       const titles = (w: number, hide: boolean) => this.titleBlocks(w, all, hide).reduce((n, b) => n + b.lines.length, 0);
@@ -1507,6 +1529,13 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
       need = Math.max(1, need);
       this.needCache.set(key, need);
       return need;
+   }
+
+   /** Fewest rows worth showing: the strip and accordion need room for a few options and some text. */
+   minimumRows(width: number): number {
+      const layout = this.layoutFor(width);
+      const floor = layout === "strip" ? 7 : layout === "accordion" ? 6 : 3;
+      return Math.min(floor, this.preferredRows(width));
    }
 
    moveSelection(delta: number): void {
@@ -1663,7 +1692,7 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
       const mdTheme = safeMarkdownTheme();
       const { panel } = listColors(theme);
       const panes = this.getSplitPaneWidths(width);
-      const layout = chooseOptionLayout(width, this.singleSelectLayout, panes !== null);
+      const layout = this.layoutFor(width);
       const rows = Math.max(1, Math.min(this.maxVisibleRows, this.preferredRows(width)));
       const subject = this.subjectFor(this.selectedIndex, filteredOptions);
       const indicator = theme.fg("dim", `  (${this.selectedIndex + 1}/${count})`);
@@ -1772,6 +1801,8 @@ class AskComponent extends Container {
    private customText = "";
    /** Whether the help line currently describes PgUp/PgDn as scrolling the preview (Fix 2). */
    private hintedOverflow = false;
+   /** Inner width of the last frame, for layout-dependent minimum heights. */
+   private layoutWidth = 0;
    /** Where the option area and the action bar were drawn, for mouse events (Fix 11). */
    private promptMouseLayout?: { modeTop: number; modeRows: number; helpTop: number; barHits: HitRect[] };
    /** Switches the overlay between its size and fullscreen; set by the prompt runner when a key is configured. */
@@ -1939,6 +1970,7 @@ class AskComponent extends Container {
 
    private renderFrame(width: number): string[] {
       const innerWidth = Math.max(1, width - BOX_BORDER_OVERHEAD);
+      this.layoutWidth = innerWidth;
 
       if (this.displayMode === "overlay" || this.displayMode === "adaptive" || this.displayMode === "fullscreen") {
          return this.renderOverlayLayout(width, innerWidth);
@@ -2156,7 +2188,9 @@ class AskComponent extends Container {
    private getMinimumModeRows(): number {
       if (this.mode === "freeform") return 5;
       if (this.mode === "comment") return 6;
-      return 3;
+      // Narrow layouts (strip, accordion) need a few more rows, so long context collapses sooner.
+      const list = this.allowMultiple ? this.multiSelectList : this.singleSelectList;
+      return list && this.layoutWidth ? Math.max(3, list.minimumRows(this.layoutWidth)) : 3;
    }
 
    private getPreferredModeRows(width: number): number {

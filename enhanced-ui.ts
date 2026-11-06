@@ -237,7 +237,9 @@ export function renderPreviewPane(
    const rail = renderRail(theme, limit, doc.length, viewport, off);
    const lines = content.slice(0, limit).map((line, row) => {
       const body = paintRow(`${truncateToWidth(line, textWidth, "", true)} `, textWidth + 1, tint);
-      return `${body}${rail.cells[row] ?? " "}${paintRow(" ", 1, tint)}`;
+      // Without a scrollbar the column stays part of the panel, so the tint has no gap.
+      const railCell = rail.thumb ? rail.cells[row] ?? " " : paintRow(" ", 1, tint);
+      return `${body}${railCell}${paintRow(" ", 1, tint)}`;
    });
    return { lines, total: doc.length, viewport, offset: off, overflow, railCol: textWidth + 1, thumb: rail.thumb, maxOffset };
 }
