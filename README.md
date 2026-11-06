@@ -1,6 +1,6 @@
 # pi-ask-user
 
-> **Enhanced build.** This is pi-ask-user 0.17.2 with extra features and fixes, version `0.17.2-enhanced.1.2.0`. See [ENHANCED.md](ENHANCED.md) for what's different and how to install it. Install it from a local folder, and don't reinstall `npm:pi-ask-user`: that would replace it with upstream.
+> **Enhanced build.** This is pi-ask-user 0.17.2 with extra features and fixes, version `0.17.2-enhanced.1.3.0`. See [ENHANCED.md](ENHANCED.md) for what's different and how to install it. Install it from a local folder, and don't reinstall `npm:pi-ask-user`: that would replace it with upstream.
 
 A Pi package that adds an interactive `ask_user` tool for collecting user decisions during an agent run.
 

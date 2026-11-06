@@ -756,6 +756,8 @@ class MultiSelectList implements Component, ListMouseHost {
    private commentEnabled = false;
    /** Saved custom text (Fix 1): shown on its row and sent with the ticked options. */
    private customText = "";
+   /** Whether the saved text is ticked (Fix 1a). Unticked text stays on its row but is not sent. */
+   private customOn = false;
    private maxVisibleRows = 10;
    private cachedWidth?: number;
    private cachedLines?: string[];
@@ -809,10 +811,24 @@ class MultiSelectList implements Component, ListMouseHost {
       return this.commentEnabled;
    }
 
-   public setCustomText(text: string): void {
+   /** Set the saved custom text. Saving ticks it (Fix 1a); empty text is never ticked. */
+   public setCustomText(text: string, on = true): void {
       this.customText = text;
+      this.customOn = !!text && on;
       this.needCache.clear();
       this.invalidate();
+   }
+
+   /** True when there is saved custom text and it is ticked, so it goes out with the answer. */
+   public isCustomTextSent(): boolean {
+      return !!this.customText && this.customOn;
+   }
+
+   /** For the help line: where the highlight is relative to the custom-text row. */
+   public customRowState(): "off-row" | "empty" | "on" | "off" {
+      if (!this.isFreeformRow(this.selectedIndex)) return "off-row";
+      if (!this.customText) return "empty";
+      return this.customOn ? "on" : "off";
    }
 
    /** Highlight the custom-text row (after saving or discarding an edit). */
@@ -932,13 +948,21 @@ class MultiSelectList implements Component, ListMouseHost {
          return;
       }
 
+      // e or → on the custom-text row edits it (Fix 1a); Enter there submits instead.
+      if (this.isFreeformRow(this.selectedIndex) && (matchesKey(data, "e") || matchesKey(data, Key.right))) {
+         this.onEnterFreeform?.();
+         return;
+      }
+
       if (matchesKey(data, Key.space)) {
          this.activate();
          return;
       }
 
       if (this.keybindings.matches(data, "tui.select.confirm")) {
-         if (this.isCommentToggleRow(this.selectedIndex) || this.isFreeformRow(this.selectedIndex)) {
+         // The comment toggle, and the custom-text row while it is still empty,
+         // act on Enter like Space. Everywhere else Enter submits.
+         if (this.isCommentToggleRow(this.selectedIndex) || (this.isFreeformRow(this.selectedIndex) && !this.customText)) {
             this.activate();
             return;
          }
@@ -946,14 +970,24 @@ class MultiSelectList implements Component, ListMouseHost {
       }
    }
 
-   /** Space on the selected row: tick the option, toggle the comment, or open the custom-text editor. */
+   /**
+    * Space on the selected row: tick the option, toggle the comment, or tick
+    * and untick the saved custom text (Fix 1a). An empty custom-text row opens
+    * the editor, since typing is the only thing to do there.
+    */
    private activate(): void {
       if (this.isCommentToggleRow(this.selectedIndex)) {
          this.toggleComment();
          return;
       }
       if (this.isFreeformRow(this.selectedIndex)) {
-         this.onEnterFreeform?.();
+         if (!this.customText) {
+            this.onEnterFreeform?.();
+            return;
+         }
+         this.customOn = !this.customOn;
+         this.needCache.clear();
+         this.invalidate();
          return;
       }
       this.toggle(this.selectedIndex);
@@ -972,9 +1006,10 @@ class MultiSelectList implements Component, ListMouseHost {
          .filter((t): t is string => !!t);
 
       const fallback = this.options[this.selectedIndex]?.title;
-      const result = selectedTitles.length > 0 ? selectedTitles : fallback && !this.customText ? [fallback] : [];
+      const sendsText = this.isCustomTextSent();
+      const result = selectedTitles.length > 0 ? selectedTitles : fallback && !sendsText ? [fallback] : [];
 
-      if (result.length > 0 || this.customText) this.onSubmit?.(result);
+      if (result.length > 0 || sendsText) this.onSubmit?.(result);
    }
 
    /** The rows as shown (options with their ticks, comment toggle, custom text), for Tern's native sheet. */
@@ -989,18 +1024,29 @@ class MultiSelectList implements Component, ListMouseHost {
       if (this.allowComment) rows.push({ id: "comment", kind: "comment", label: COMMENT_TOGGLE_LABEL, on: this.commentEnabled });
       if (this.allowFreeform) {
          rows.push(this.customText
-            ? { id: "freeform", kind: "freeform", label: `✎ “${this.customText}”`, detail: "Your text: sent with the ticked options", on: true }
+            ? {
+               id: "freeform",
+               kind: "freeform",
+               label: `✎ “${this.customText}”`,
+               detail: this.customOn ? "Your text: sent with the ticked options" : "Your text: kept, not sent",
+               on: this.customOn,
+            }
             : { id: "freeform", kind: "freeform", label: "Other" });
       }
       return { rows, selected: this.selectedIndex };
    }
 
-   /** Select row `row` of nativeSheet(); `activate` then acts as Space on it. */
+   /**
+    * Select row `row` of nativeSheet(); `activate` then acts as Space on it,
+    * except on the custom-text row, where a tap edits the text (Tern shows that
+    * row as "Other", not as a checkbox).
+    */
    selectRow(row: number, activate: boolean): void {
       if (row < 0 || row >= this.getItemCount()) return;
       this.selectedIndex = row;
       this.invalidate();
-      if (activate) this.activate();
+      if (activate && this.isFreeformRow(row)) this.onEnterFreeform?.();
+      else if (activate) this.activate();
    }
 
    clickTarget(target: HitTarget, clickCount: number): void {
@@ -1019,7 +1065,12 @@ class MultiSelectList implements Component, ListMouseHost {
       const changed = this.selectedIndex !== target.index;
       this.selectedIndex = target.index;
       this.invalidate();
-      // Double-click acts like Space: tick the option, toggle the comment, edit the text.
+      // Clicking the custom-text row (outside its box and "clear") edits the text (Fix 1a).
+      if (this.isFreeformRow(target.index)) {
+         this.onEnterFreeform?.();
+         return;
+      }
+      // Double-click acts like Space: tick the option or toggle the comment.
       if (!changed && clickCount >= 2) this.activate();
    }
 
@@ -1056,11 +1107,18 @@ class MultiSelectList implements Component, ListMouseHost {
          };
       }
       if (this.isFreeformRow(index)) {
+         if (this.customText && !this.customOn) {
+            return {
+               title: "Your text",
+               badge: this.theme.fg("warning", "○ not sent"),
+               detail: `“${this.customText}”\n\nKept, but not sent. Tick it to send it.\n\nSpace: tick · e or →: edit · Backspace: remove · Enter: submit`,
+            };
+         }
          return this.customText
             ? {
                title: "Your text",
                badge: this.theme.fg("success", "✓ will be sent"),
-               detail: `“${this.customText}”\n\nSent together with the ticked options.\n\nEnter or Space: edit · Backspace: remove`,
+               detail: `“${this.customText}”\n\nSent together with the ticked options.\n\nSpace: untick · e or →: edit · Backspace: remove · Enter: submit`,
             }
             : {
                title: "Custom response",
@@ -1092,8 +1150,12 @@ class MultiSelectList implements Component, ListMouseHost {
                const clear = isSelected ? theme.fg("dim", "  ⌫ clear") : "";
                const room = Math.max(4, width - 10 - visibleWidth(clear));
                const quoted = truncateToWidth(`“${this.customText}”`, room, "…”");
-               const text = isSelected ? theme.fg("accent", theme.bold(quoted)) : theme.fg("text", quoted);
-               lines.push(`${prefix}   ${theme.fg("success", "[✓]")} ${theme.fg("accent", "✎")} ${text}${clear}`);
+               const on = this.customOn;
+               const text = isSelected
+                  ? theme.fg(on ? "accent" : "muted", theme.bold(quoted))
+                  : theme.fg(on ? "text" : "dim", quoted);
+               const box = on ? theme.fg("success", "[✓]") : theme.fg("dim", "[ ]");
+               lines.push(`${prefix}   ${box} ${theme.fg(on ? "accent" : "dim", "✎")} ${text}${clear}`);
             } else {
                const label = theme.fg("text", theme.bold("Type something."));
                lines.push(`${prefix}   ${theme.fg("dim", "[ ]")} ${theme.fg("accent", "✎")} ${label} ${theme.fg("muted", "your own text")}`);
@@ -1129,8 +1191,12 @@ class MultiSelectList implements Component, ListMouseHost {
             this.hits.push({ row: top + row, rows: 1, col, cols: 3, target: { kind: "check", index: item } });
          } else if (first && this.isCommentToggleRow(item)) {
             this.hits.push({ row: top + row, rows: 1, col: 4, cols: 3, target: { kind: "check", index: item } });
-         } else if (first && this.isFreeformRow(item) && this.customText && item === this.selectedIndex) {
-            this.hits.push({ row: top + row, rows: 1, col: Math.max(0, width - 9), cols: 9, target: { kind: "clear" } });
+         } else if (first && this.isFreeformRow(item)) {
+            // The box ticks and unticks saved text, or opens the editor when empty (Fix 1a).
+            this.hits.push({ row: top + row, rows: 1, col: 4, cols: 3, target: { kind: "check", index: item } });
+            if (this.customText && item === this.selectedIndex) {
+               this.hits.push({ row: top + row, rows: 1, col: Math.max(0, width - 9), cols: 9, target: { kind: "clear" } });
+            }
          }
          this.hits.push({ row: top + row, rows: 1, col: 0, cols: width, target: { kind: "row", index: item } });
       });
@@ -1799,6 +1865,8 @@ class AskComponent extends Container {
    private customText = "";
    /** Whether the help line currently describes PgUp/PgDn as scrolling the preview (Fix 2). */
    private hintedOverflow = false;
+   /** The custom-text row state the help line was last written for (Fix 1a). */
+   private hintedRowState = "";
    /** Inner width of the last frame, for layout-dependent minimum heights. */
    private layoutWidth = 0;
    /** Where the option area and the action bar were drawn, for mouse events (Fix 11). */
@@ -1943,9 +2011,15 @@ class AskComponent extends Container {
       let lines = this.renderFrame(width);
       // The preview only claims PgUp/PgDn while its text overflows, which is
       // known after the option area is drawn: refresh the hint and redraw once.
+      // The custom-text row has its own key hints (Fix 1a), so the hint also
+      // follows the highlight onto and off that row.
       const overflow = this.previewOverflows();
-      if (overflow !== this.hintedOverflow) {
+      const rowState = this.mode === "select" && this.allowMultiple && this.usesCustomTextRow()
+         ? this.ensureMultiSelectList().customRowState()
+         : "";
+      if (overflow !== this.hintedOverflow || rowState !== this.hintedRowState) {
          this.hintedOverflow = overflow;
+         this.hintedRowState = rowState;
          this.updateHelpText();
          lines = this.renderFrame(width);
       }
@@ -2548,17 +2622,29 @@ class AskComponent extends Container {
       }
 
       if (this.allowMultiple) {
+         // On the custom-text row the keys mean something else (Fix 1a): say so.
+         const row = this.usesCustomTextRow() ? this.ensureMultiSelectList().customRowState() : "off-row";
+         const rowHints = row === "empty"
+            ? [literalHint(theme, "space", "write your text")]
+            : row === "on" || row === "off"
+               ? [
+                  literalHint(theme, "space", row === "on" ? "untick" : "tick"),
+                  literalHint(theme, "e/→", "edit"),
+                  literalHint(theme, "⌫", "remove"),
+                  // Early, so it survives on narrow screens: Enter now submits from here.
+                  keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
+               ]
+               : [literalHint(theme, "space", "toggle"), this.customText ? literalHint(theme, "⌫", "remove your text") : null];
          const hints = [
             this.navigationHint,
             literalHint(theme, "↑↓", "navigate"),
-            literalHint(theme, "space", "toggle"),
+            ...rowHints,
             commentHint,
             contextHint,
             promptScrollHint,
-            this.customText ? literalHint(theme, "⌫", "remove your text") : null,
             overlayHint,
             fullscreenHint,
-            keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
+            row === "on" || row === "off" ? null : keybindingHint(theme, this.keybindings, "tui.select.confirm", row === "empty" ? "write your text" : "submit"),
             keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
          ]
             .filter((hint): hint is string => !!hint)
@@ -2759,7 +2845,8 @@ class AskComponent extends Container {
 
    private handleSelectionSubmit(selections: string[], wantsComment: boolean, selectedIds?: number[]): void {
       // Only text the user saved goes out; an abandoned editor draft never does (Fix 1).
-      const custom = this.usesCustomTextRow() ? this.customText : "";
+      // Unticked text stays on its row but is not sent (Fix 1a).
+      const custom = this.usesCustomTextRow() && this.multiSelectList?.isCustomTextSent() ? this.customText : "";
       if (this.allowComment && wantsComment && selections.length > 0) {
          this.pendingSelections = selections;
          this.pendingSelectedIds = selectedIds;

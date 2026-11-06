@@ -4,7 +4,7 @@ This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) 0.17.2 by Enzo Lucch
 
 | | |
 |---|---|
-| Version | `0.17.2-enhanced.1.2.0` (shown at the bottom of every prompt) |
+| Version | `0.17.2-enhanced.1.3.0` (shown at the bottom of every prompt) |
 | Upstream base | pi-ask-user 0.17.2 |
 | Tested with | Pi 0.74.2, 1.0.2 and 1.5.0 |
 
@@ -62,6 +62,7 @@ In Pi's fullscreen interface (`tuiMode: "fullscreen"`, Pi's default) the prompt 
 
 - Click an option to highlight it. Double-click chooses it (single-select) or ticks it (multi-select).
 - Click a checkbox to tick it without moving the highlight.
+- On your own text in multi-select, click the box to tick or untick it, the text to edit it, and "⌫ clear" to remove it.
 - The wheel moves through the options over the list, and scrolls the description over the preview.
 - Drag the scrollbar, or click above or below the thumb to jump a page.
 - Click the buttons. In batches, clicks go to the current question, and the review page has Submit and Cancel buttons.
@@ -82,13 +83,18 @@ When no option has a description there is nothing to preview, so narrow prompts 
 
 ### Your own text in multi-select
 
-In a multi-select question, the "Type something" row works like one more checkbox:
+In a multi-select question, the "Type something" row works like one more checkbox. On the row, Space ticks, Enter submits and Backspace removes, the same as on the other rows.
 
-- **Enter** in the editor saves the text and returns to the list, where the row shows it ticked. It no longer submits the prompt.
-- **Esc** in the editor undoes that edit and keeps what was saved before. Text you type and then leave with Esc is never sent.
-- **Backspace** (or Delete) on the row removes the text. Enter or Space on it edits it.
-- **Submit** sends the ticked options plus your text as a `combined` answer, or the text alone as a `freeform` answer when nothing is ticked.
-- The editor shows what is already ticked.
+- **Writing:** while the row is empty, Space, Enter, `e` or → opens the editor. The editor shows what is already ticked.
+- **Enter in the editor** saves the text and returns to the list, where the row shows it ticked. It doesn't submit the prompt.
+- **Esc in the editor** undoes that edit and keeps what was saved before. Text you type and then leave with Esc is never sent.
+- **Space** on saved text ticks and unticks it. Unticked text stays on the row, dimmed, and the preview says "○ not sent". It isn't sent until you tick it again.
+- **`e` or →** edits saved text, ticked or not. Saving an edit ticks it again.
+- **Enter** on saved text submits the prompt, so you don't have to move up first.
+- **Backspace** (or Delete) on the row removes the text for good.
+- **Submit** sends the ticked options plus your text (if ticked) as a `combined` answer, or the text alone as a `freeform` answer when nothing else is ticked.
+
+The help line changes while the row is highlighted to show these keys. In Tern's native card, tapping the row edits the text; the card shows whether it's ticked but can't untick it.
 
 Single-select is unchanged: custom text replaces the choice and submits.
 
@@ -154,6 +160,12 @@ type AskResponse =
 - Mouse support works in Pi 1.0.2 and 1.5.0. Pi 0.74 has no mouse input for extensions, so there everything works from the keyboard.
 
 ## Changelog
+
+### enhanced 1.3.0 (on upstream 0.17.2)
+
+- Your own text in multi-select is a real checkbox: Space or clicking the box ticks and unticks it, and unticked text stays on screen without being sent.
+- Enter on your text row submits the prompt instead of opening the editor. `e`, → or clicking the text edits it; saving an edit ticks it again.
+- The help line shows the right keys on that row. Before, it said "enter submit" while Enter opened the editor.
 
 ### enhanced 1.2.0 (on upstream 0.17.2)
 

@@ -27,6 +27,7 @@ const KEY = {
    altM: "\x1bm",
    altO: "\x1bo",
    ctrlE: "\x05",
+   right: "\x1b[C",
 };
 
 const plainTheme = {
@@ -163,7 +164,7 @@ describe("Fix 1: multi-select custom text behaves like a checkbox", () => {
          s.keys(KEY.up, KEY.space);
          s.type("keep JSON bodies");
          s.keys(KEY.enter);
-         s.keys(KEY.space); // edit again
+         s.type("e"); // edit again (Space would untick it, Fix 1a)
          for (let i = 0; i < 20; i++) s.keys(KEY.backspace);
          s.type("skip it");
          s.keys(KEY.esc); // undo this edit
@@ -228,6 +229,164 @@ describe("Fix 1: multi-select custom text behaves like a checkbox", () => {
          s.keys(KEY.enter);
       });
       expect(result.details.response).toEqual({ kind: "freeform", text: "something else" });
+   });
+});
+
+// ── Fix 1a: the custom-text row is a real checkbox ─────────────────────────
+
+/** From the first option: go up to the custom-text row, write `text`, save it. */
+function saveText(s: Session, text: string): void {
+   s.keys(KEY.up, KEY.space);
+   s.type(text);
+   s.keys(KEY.enter);
+}
+
+describe("Fix 1a: tick and untick your own text; Enter submits", () => {
+   test("Space unticks saved text: it stays on screen but is not sent", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space); // tick Rate limiting
+         saveText(s, "keep JSON bodies");
+         s.keys(KEY.space); // untick the text
+         shown = s.text();
+         s.keys(KEY.enter); // submit right from the row
+      });
+      expect(shown).toContain("[ ] ✎ “keep JSON bodies”");
+      expect(shown).toContain("○ not sent");
+      expect(shown).toContain("space tick");
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Rate limiting"] });
+   });
+
+   test("Space again ticks it back, nothing retyped", async () => {
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space);
+         saveText(s, "keep JSON bodies");
+         s.keys(KEY.space, KEY.space, KEY.enter);
+      });
+      expect(result.details.response).toEqual({ kind: "combined", selections: ["Rate limiting"], text: "keep JSON bodies" });
+   });
+
+   test("Enter on the custom-text row submits instead of opening the editor", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space);
+         saveText(s, "plus a dashboard");
+         shown = s.text();
+         s.keys(KEY.enter);
+      });
+      expect(shown).toContain("space untick");
+      expect(shown).toContain("e/→ edit");
+      expect(shown).toContain("⌫ remove");
+      expect(shown).toContain("enter submit");
+      expect(result.details.response).toEqual({ kind: "combined", selections: ["Rate limiting"], text: "plus a dashboard" });
+   });
+
+   test("e and → edit the text", async () => {
+      let viaE = "";
+      let viaRight = "";
+      const { result } = await run(hardening, (s) => {
+         saveText(s, "first");
+         s.type("e");
+         viaE = s.text();
+         s.keys(KEY.esc, KEY.right);
+         viaRight = s.text();
+         for (let i = 0; i < 5; i++) s.keys(KEY.backspace);
+         s.type("second");
+         s.keys(KEY.enter, KEY.enter);
+      });
+      expect(viaE).toContain("Your own text");
+      expect(viaRight).toContain("Your own text");
+      expect(result.details.response).toEqual({ kind: "freeform", text: "second" });
+   });
+
+   test("saving an edit ticks unticked text again", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space);
+         saveText(s, "under budget");
+         s.keys(KEY.space); // untick
+         s.type("e");
+         s.type(" please");
+         s.keys(KEY.enter); // save → ticked again
+         shown = s.text();
+         s.keys(KEY.enter);
+      });
+      expect(shown).toContain("[✓] ✎ “under budget please”");
+      expect(result.details.response).toEqual({ kind: "combined", selections: ["Rate limiting"], text: "under budget please" });
+   });
+
+   test("with nothing ticked and the text unticked, Enter on the row sends nothing", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         saveText(s, "maybe later");
+         s.keys(KEY.space, KEY.enter);
+         shown = s.text();
+      });
+      expect(shown).toContain("○ not sent");
+      expect(result.details.cancelled).toBe(true); // still open when the test ends
+   });
+
+   test("unticked text on an option row: the highlighted option is sent, as before", async () => {
+      const { result } = await run(hardening, (s) => {
+         saveText(s, "maybe later");
+         s.keys(KEY.space, KEY.up, KEY.enter);
+      });
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Input schema validation"] });
+   });
+
+   test("the empty row still opens the editor on Space, Enter, e and →", async () => {
+      const opened: string[] = [];
+      await run(hardening, (s) => {
+         for (const key of [KEY.space, KEY.enter, "e", KEY.right]) {
+            s.keys(KEY.up, key);
+            opened.push(s.text());
+            s.keys(KEY.esc);
+            s.keys(KEY.down); // back to the first option
+         }
+      });
+      for (const frame of opened) expect(frame).toContain("Your own text");
+   });
+
+   test("help line on the empty row says Space and Enter write your text", async () => {
+      let shown = "";
+      await run(hardening, (s) => {
+         s.keys(KEY.up);
+         shown = s.text();
+      });
+      expect(shown).toContain("space write your text");
+      expect(shown).not.toContain("space toggle");
+   });
+
+   test("Backspace still removes the text, ticked or not", async () => {
+      let shown = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space);
+         saveText(s, "drop me");
+         s.keys(KEY.space, KEY.backspace);
+         shown = s.text();
+         s.keys(KEY.up, KEY.enter); // the row is empty now, so Enter there would open the editor
+      });
+      expect(shown).not.toContain("drop me");
+      expect(result.details.response).toEqual({ kind: "selection", selections: ["Rate limiting"] });
+   });
+
+   test("mouse: the box ticks and unticks, the text edits", async () => {
+      let unticked = "";
+      let editing = "";
+      const { result } = await run(hardening, (s) => {
+         s.keys(KEY.space);
+         saveText(s, "click me");
+         s.click("[✓] ✎", 1);
+         unticked = s.text();
+         s.click("✎ “click me”", 4); // the row's text (the preview shows it too, higher up)
+         editing = s.text();
+         s.keys(KEY.esc);
+         s.click("[ ] ✎", 1); // tick it again
+         s.keys(KEY.enter);
+      });
+      expect(unticked).toContain("[ ] ✎ “click me”");
+      expect(editing).toContain("Your own text");
+      expect(result.details.response).toEqual({ kind: "combined", selections: ["Rate limiting"], text: "click me" });
    });
 });
 
@@ -607,6 +766,6 @@ describe("Fix 10: version", () => {
    test("the frame shows the enhanced version", async () => {
       let shown = "";
       await run({ question: "Pick", options: ["A"] }, (s) => (shown = s.text()));
-      expect(shown).toContain("v0.17.2-enhanced.1.2.0");
+      expect(shown).toContain("v0.17.2-enhanced.1.3.0");
    });
 });
