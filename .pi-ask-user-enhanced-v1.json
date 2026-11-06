@@ -1,18 +1,81 @@
 {
-  "release": "enhanced-v1.1.3",
-  "upstream": "0.17.0",
+  "release": "enhanced-v1.2.0",
+  "version": "0.17.2-enhanced.1.2.0",
+  "upstream": "0.17.2",
+  "upstreamSource": "npm:pi-ask-user@0.17.2",
   "files": [
     "index.ts",
-    "settings.ts"
+    "settings.ts",
+    "single-select-layout.ts",
+    "tern.ts",
+    "enhanced-ui.ts",
+    "ENHANCED.md",
+    "README.md",
+    "package.json",
+    "skills/ask-user/SKILL.md",
+    "skills/ask-user/references/ask-user-skill-extension-spec.md"
   ],
   "hashes": {
     "index.ts": {
-      "before": "da2caef98bcd1b9a1040f2165c6d01dbab998d6d833a6c5cb447b9f527ceeb98",
-      "after": "33569a6698490ae6e091cdc25c99079e9e51326ac384e7003deac36506985d11"
+      "before": "91c97512f8a753fada5179b703168ecf95b1b1a7a2842f8f431b539317d0da66",
+      "after": "3a2c03127528faf4b8a301e3406957df6547fc8186e6550815ae53cdc3865779"
     },
     "settings.ts": {
       "before": "e01560fa759d8bdc4296c1edcbc63f935c358d8e8e454ec6fee49d5341e787e7",
-      "after": "d95b38af2085b414a0f52f95fd1ce5c320a7d2659f6ed612afb97eaeff326d44"
+      "after": "9ac712f0842e0ebf9824efc428891d93cacfd6fed3e746dd95e4a05aad69ddc8"
+    },
+    "single-select-layout.ts": {
+      "before": "870a8467b987d0d57d26c516bc49a9c18086d86b5f1f683f414408b189cde088",
+      "after": "ff4c55e062d9b8e667a49f2bf95d44a1dc219c1736773149b78beffa74f4c539"
+    },
+    "tern.ts": {
+      "before": "c5d58444e074d7378173713cbd9ef91388350be4ee285d606ae10404b7dfdca2",
+      "after": "6c889a28cec80e1f4a45685131c5f1597d0a9600294d8f7f16ba0d1f3ff31b5d"
+    },
+    "enhanced-ui.ts": {
+      "before": null,
+      "after": "cd354283f12c4a75f5e4cdb49a37615720c21d9de9343edcdbb0e7f612bdbefa"
+    },
+    "ENHANCED.md": {
+      "before": null,
+      "after": "5b97ec3a7621160062500f23e64380215ce4c556c693dc14a004144ab3818d26"
+    },
+    "README.md": {
+      "before": "e5f80d73a4000a56b076fb29e8518ffd709991ab67d68c3e4d500222892e1af7",
+      "after": "11627dc0ae5fb3bef9aec77bf66eadaa0b169cc8eb25d0ef3093e9088996df49"
+    },
+    "package.json": {
+      "before": "95de2200987a246b3d225283118c7b1ae56293f90babb44716c43f68698fd6c9",
+      "after": "3d246c0f1d09aeb28502f6bf2dbcb596a16858cc5c774e46c30715cc766e7e37"
+    },
+    "skills/ask-user/SKILL.md": {
+      "before": "cab1a048232c59b6704e77064092709d824d9c57b7618d0b4d0394ee730fdb45",
+      "after": "f7df17c4437c1249032a45f96bbdcc02c15194ad321358ec589327db6dd9495d"
+    },
+    "skills/ask-user/references/ask-user-skill-extension-spec.md": {
+      "before": "eb67d510add161ba22ca3f7f2385d66800fcd5b4cc555926668a3325157792b6",
+      "after": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055"
+    }
+  },
+  "unchangedFromUpstream": [
+    "LICENSE"
+  ],
+  "previous": {
+    "release": "enhanced-v1.1.3",
+    "upstream": "0.17.0",
+    "files": [
+      "index.ts",
+      "settings.ts"
+    ],
+    "hashes": {
+      "index.ts": {
+        "before": "da2caef98bcd1b9a1040f2165c6d01dbab998d6d833a6c5cb447b9f527ceeb98",
+        "after": "33569a6698490ae6e091cdc25c99079e9e51326ac384e7003deac36506985d11"
+      },
+      "settings.ts": {
+        "before": "e01560fa759d8bdc4296c1edcbc63f935c358d8e8e454ec6fee49d5341e787e7",
+        "after": "d95b38af2085b414a0f52f95fd1ce5c320a7d2659f6ed612afb97eaeff326d44"
+      }
     }
   }
 }
