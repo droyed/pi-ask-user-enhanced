@@ -37,6 +37,7 @@ import {
    Text,
    type TUI,
    truncateToWidth,
+   visibleWidth,
    wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { renderSingleSelectRows, type QuestionOption } from "./single-select-layout";
@@ -58,6 +59,31 @@ import {
    textSheet,
 } from "./tern";
 import { loadAskUserSettings } from "./settings";
+import {
+   HIGHLIGHT_BG,
+   PANEL_BG,
+   PreviewScroll,
+   blockSpan,
+   chooseOptionLayout,
+   hitAt,
+   offsetForThumbRow,
+   offsetRects,
+   paintRow,
+   previewNeedRows,
+   renderActionBar,
+   renderPreviewPane,
+   themeBgOpen,
+   windowRows,
+   type ActionButton,
+   type AskMouseEvent,
+   type AskMouseResult,
+   type HitRect,
+   type HitTarget,
+   type PreviewRender,
+   type PreviewSubject,
+   type RowBlock,
+   type WindowedRows,
+} from "./enhanced-ui";
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -172,6 +198,7 @@ interface AskParams {
    contextExpanded?: boolean;
    overlayToggleKey?: string | null;
    commentToggleKey?: string | null;
+   fullscreenToggleKey?: string | null;
    timeout?: number;
 }
 
@@ -487,6 +514,8 @@ type ResolvedShortcut =
 interface ResolvedAskShortcuts {
    overlayToggle: ResolvedShortcut;
    commentToggle: ResolvedShortcut;
+   /** Switches a mounted overlay between its configured size and fullscreen (not in inline mode). */
+   fullscreenToggle: ResolvedShortcut;
 }
 
 const DISABLED_SHORTCUT: ResolvedShortcut = {
@@ -555,6 +584,7 @@ const FREEFORM_DIALOG_LABEL = "\u270f\ufe0f Type something (add your own text)";
 const COMMENT_TOGGLE_LABEL = "Add extra context after selection";
 const DEFAULT_OVERLAY_TOGGLE_KEY = "alt+o";
 const DEFAULT_COMMENT_TOGGLE_KEY = "ctrl+g";
+const DEFAULT_FULLSCREEN_TOGGLE_KEY = "alt+m";
 const CONTEXT_TOGGLE_KEYS = [Key.ctrl("e"), Key.ctrl("x"), Key.ctrl("y")];
 const INLINE_CONTEXT_MAX_ROWS = 3;
 
@@ -632,133 +662,121 @@ function buildCustomUIOptions(
    }
 }
 
-// PI_ASK_USER_PREVIEW_SCROLL_V43: retained scrollbar feature marker.
-// PI_ASK_USER_UNIVERSAL_PREVIEW_V11: shared structure for every visible option preview.
-// PI_ASK_USER_DYNAMIC_SCROLLBAR_V112: show the rail only when the preview overflows.
-interface UniversalPreviewResult {
-   lines: string[];
-   offset: number;
-   totalLines: number;
-   viewportRows: number;
+/** Placeholder detail for options sent without a description. */
+const NO_DESCRIPTION = "No description provided for this option.";
+
+/** The bordered preview panel and selection bar colors, resolved once per theme. */
+function listColors(theme: Theme): { highlight: string; panel: string } {
+   return { highlight: themeBgOpen(theme, HIGHLIGHT_BG), panel: themeBgOpen(theme, PANEL_BG) };
 }
-function renderUniversalPreviewPane(args: {
-   width: number;
-   maxRows: number;
-   title: string;
-   detail: string;
-   position: number;
-   count: number;
-   status: string;
-   scrollOffset: number;
-   theme: Theme;
-}): UniversalPreviewResult {
-   const { width, title, detail, position, count, status, theme } = args;
-   const textWidth = Math.max(1, width - 5);
-   const mdTheme = safeMarkdownTheme();
-   let docLines: string[];
-   if (mdTheme) {
-      docLines = new Markdown(detail, 0, 0, mdTheme).render(textWidth);
-   } else {
-      docLines = [];
-      for (const line of detail.split(/\r?\n/)) {
-         const wrapped = wrapTextWithAnsi(line, textWidth);
-         docLines.push(...(wrapped.length ? wrapped : [""]));
+
+/** The 3-cell gap between the list and the preview: a divider, or the panel's left padding when tinted. */
+function splitSeparator(theme: Theme, panel: string): string {
+   return panel ? ` ${paintRow("  ", 2, panel)}` : theme.fg("dim", SINGLE_SELECT_SPLIT_PANE_SEPARATOR);
+}
+
+/** The dashed line between the list and the detail strip. */
+function stripSeparator(theme: Theme, width: number): string {
+   return theme.fg("dim", ` ${"╌".repeat(Math.max(0, width - 2))}`);
+}
+
+/** Mouse handling shared by both lists: wheel, scrollbar dragging, row and checkbox clicks. */
+interface ListMouseHost {
+   preview: PreviewScroll;
+   hits: HitRect[];
+   drag?: { grab: number; railTop: number; railRows: number; thumbRows: number; maxOffset: number };
+   invalidate(): void;
+   moveSelection(delta: number): void;
+   clickTarget(target: HitTarget, clickCount: number): void;
+}
+
+function handleListMouse(host: ListMouseHost, event: AskMouseEvent): AskMouseResult | undefined {
+   if (host.drag) {
+      if (event.type === "drag") {
+         const { grab, railTop, railRows, thumbRows, maxOffset } = host.drag;
+         if (host.preview.scrollTo(offsetForThumbRow(event.y - railTop - grab, railRows, thumbRows, maxOffset))) host.invalidate();
+         return { handled: true, render: true };
+      }
+      if (event.type === "release") {
+         host.drag = undefined;
+         return { handled: true };
       }
    }
-   while (docLines.length > 0 && docLines[docLines.length - 1]?.trim() === "") docLines.pop();
-
-   const limit = Math.max(1, args.maxRows);
-   const headerRows = limit >= 8 ? 4 : limit >= 6 ? 3 : limit >= 5 ? 2 : limit >= 2 ? 1 : 0;
-   const footerRows = limit >= 3 ? 1 : 0;
-   const viewportRows = Math.max(1, limit - headerRows - footerRows);
-   const maxOffset = Math.max(0, docLines.length - viewportRows);
-   const offset = Math.max(0, Math.min(args.scrollOffset, maxOffset));
-   const start = docLines.length ? offset + 1 : 0;
-   const finish = Math.min(docLines.length, offset + viewportRows);
-   // The rail spans the entire pane, including its fixed header and footer.
-   // Compute the thumb in that same coordinate space so both endpoints touch.
-   const trackRows = limit;
-   const thumbLen = maxOffset > 0
-      ? Math.max(1, Math.min(trackRows, Math.round(trackRows * viewportRows / Math.max(1, docLines.length))))
-      : trackRows;
-   const maxThumbStart = trackRows - thumbLen;
-   const thumbStart = maxOffset === 0 ? 0
-      : offset === 0 ? 0
-      : offset === maxOffset ? maxThumbStart
-      : Math.round(offset * maxThumbStart / maxOffset);
-   // Preserve the five-cell inset gutter whether the scrollbar is visible or not.
-   // On every render (including terminal resizes and selection changes), only
-   // paint the rail if the current, wrapped description exceeds the viewport.
-   const showScrollbar = maxOffset > 0;
-   const rail = (text: string, thumb: boolean): string =>
-      `${truncateToWidth(text, textWidth, "", true)} ${showScrollbar ? theme.fg(thumb ? "warning" : "accent", thumb ? "█" : "┃") : " "}   `;
-   const overflow = maxOffset === 0 ? "all visible" : offset === 0 ? "↓ more below" : offset === maxOffset ? "↑ at end" : "↑↓ more";
-   const header = [
-      theme.fg("accent", theme.bold(`Preview ${position}/${count} · ${start}–${finish}/${docLines.length}`)),
-      theme.fg("text", theme.bold(title)),
-      theme.fg("dim", status),
-      theme.fg("accent", `Scroll ${start}–${finish}/${docLines.length} · ${overflow}`),
-   ];
-   const withRail = (text: string, row: number): string =>
-      rail(text, row >= thumbStart && row < thumbStart + thumbLen);
-   const lines: string[] = header.slice(0, headerRows).map((text, row) => withRail(text, row));
-   for (let row = 0; row < viewportRows; row++) {
-      lines.push(withRail(docLines[offset + row] ?? "", headerRows + row));
+   const rect = hitAt(host.hits, event.x, event.y);
+   if (event.type === "wheel") {
+      const step = Math.sign(event.wheelDelta ?? 0);
+      if (!step) return undefined;
+      const area = rect ? host.hits.find((hit) => hit.target.kind === "preview" && event.y >= hit.row && event.y < hit.row + hit.rows && event.x >= hit.col && event.x < hit.col + hit.cols) : undefined;
+      if (area && host.preview.overflow) {
+         if (host.preview.scrollBy(step * 3)) host.invalidate();
+         return { handled: true };
+      }
+      const inList = host.hits.some((hit) => hit.target.kind === "list" && event.y >= hit.row && event.y < hit.row + hit.rows && event.x >= hit.col && event.x < hit.col + hit.cols);
+      if (inList) {
+         host.moveSelection(step);
+         return { handled: true };
+      }
+      return undefined;
    }
-   if (footerRows) {
-      const hint = textWidth >= 57
-         ? "PgUp/PgDn page · Alt+↑/↓ line · Alt+Home/End jump"
-         : "PgUp/PgDn page · Alt+↑/↓ line";
-      lines.push(withRail(theme.fg("dim", hint), headerRows + viewportRows));
+   if (!rect) return undefined;
+   const target = rect.target;
+   if (target.kind === "rail") {
+      if (event.type === "press") {
+         const row = event.y - rect.row;
+         if (row >= target.thumbStart && row < target.thumbEnd) {
+            host.drag = { grab: row - target.thumbStart, railTop: rect.row, railRows: rect.rows, thumbRows: target.thumbEnd - target.thumbStart, maxOffset: target.maxOffset };
+            return { handled: true, capture: true };
+         }
+         const page = Math.max(1, host.preview.viewport - 1);
+         if (host.preview.scrollBy(row < target.thumbStart ? -page : page)) host.invalidate();
+         return { handled: true };
+      }
+      return { handled: true };
    }
-   return { lines: lines.slice(0, limit), offset, totalLines: docLines.length, viewportRows };
+   if (event.type === "click" && (target.kind === "row" || target.kind === "check" || target.kind === "clear")) {
+      host.clickTarget(target, event.clickCount ?? 1);
+      return { handled: true };
+   }
+   if (event.type === "press" && (target.kind === "row" || target.kind === "check" || target.kind === "clear")) {
+      // Claim the press so the click that follows comes back to this list.
+      return { handled: true };
+   }
+   return undefined;
 }
 
-class MultiSelectList implements Component {
+class MultiSelectList implements Component, ListMouseHost {
    private options: QuestionOption[];
    private allowFreeform: boolean;
    private allowComment: boolean;
    private theme: Theme;
-   private multiPreviewLayout: AskSingleSelectLayout;
-   private previewScrollOffset = 0;
-   private previewTotalLines = 0;
-   private previewViewportRows = 0;
-   private previewSelectionIndex = -1;
-   private previewActive = false;
-   private previewLeftWidth = 0;
+   private layoutPreference: AskSingleSelectLayout;
    private keybindings: KeybindingsManager;
    private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
    private checked = new Set<number>();
-   // PI_ASK_USER_PRESELECT_COMBINED_V113: preserve selections across custom editor.
-   public selectedOptionIndices(explicitOnly = false): number[] {
-      const indices = [...this.checked].sort((a, b) => a - b);
-      return explicitOnly ? indices : (indices.length ? indices : (this.selectedIndex < this.options.length ? [this.selectedIndex] : []));
-   }
-   public preselect(ids: number[]): void {
-      this.checked.clear();
-      for (const id of ids) {
-         const index = this.options.findIndex((option) => (option as QuestionOption & { id?: number }).id === id);
-         if (index >= 0) this.checked.add(index);
-      }
-      if (this.checked.size) this.selectedIndex = Math.min(...this.checked);
-      this.invalidate();
-   }
    private commentEnabled = false;
+   /** Saved custom text (Fix 1): shown on its row and sent with the ticked options. */
+   private customText = "";
    private maxVisibleRows = 10;
    private cachedWidth?: number;
    private cachedLines?: string[];
+   private needCache = new Map<string, number>();
+   readonly preview = new PreviewScroll();
+   hits: HitRect[] = [];
+   drag?: ListMouseHost["drag"];
 
    public onCancel?: () => void;
    public onSubmit?: (result: string[]) => void;
    public onEnterFreeform?: () => void;
+   /** Backspace or Delete on the custom-text row while it holds text. */
+   public onClearCustom?: () => void;
 
    constructor(
       options: QuestionOption[],
       allowFreeform: boolean,
       allowComment: boolean,
       theme: Theme,
-      multiPreviewLayout: AskSingleSelectLayout,
+      layoutPreference: AskSingleSelectLayout,
       keybindings: KeybindingsManager,
       commentToggle: ResolvedShortcut,
    ) {
@@ -766,13 +784,43 @@ class MultiSelectList implements Component {
       this.allowFreeform = allowFreeform;
       this.allowComment = allowComment;
       this.theme = theme;
-      this.multiPreviewLayout = multiPreviewLayout;
+      this.layoutPreference = layoutPreference;
       this.keybindings = keybindings;
       this.commentToggle = commentToggle;
    }
 
+   /** Ticked option indexes in list order; with `explicitOnly` false and nothing ticked, the highlighted option. */
+   public selectedOptionIndices(explicitOnly = false): number[] {
+      const indices = [...this.checked].sort((a, b) => a - b);
+      if (explicitOnly || indices.length) return indices;
+      return this.selectedIndex < this.options.length ? [this.selectedIndex] : [];
+   }
+
+   public preselect(ids: number[]): void {
+      this.checked.clear();
+      for (const id of ids) {
+         const index = this.options.findIndex((option) => (option as IdentifiedOption).id === id);
+         if (index >= 0) this.checked.add(index);
+      }
+      if (this.checked.size) this.selectedIndex = Math.min(...this.checked);
+      this.invalidate();
+   }
+
    public isCommentEnabled(): boolean {
       return this.commentEnabled;
+   }
+
+   public setCustomText(text: string): void {
+      this.customText = text;
+      this.needCache.clear();
+      this.invalidate();
+   }
+
+   /** Highlight the custom-text row (after saving or discarding an edit). */
+   public focusCustomRow(): void {
+      if (!this.allowFreeform) return;
+      this.selectedIndex = this.getFreeformIndex();
+      this.invalidate();
    }
 
    setMaxVisibleRows(rows: number): void {
@@ -818,7 +866,23 @@ class MultiSelectList implements Component {
    private toggleComment(): void {
       if (!this.allowComment) return;
       this.commentEnabled = !this.commentEnabled;
+      this.needCache.clear();
       this.invalidate();
+   }
+
+   moveSelection(delta: number): void {
+      const count = this.getItemCount();
+      if (count === 0) return;
+      this.selectedIndex = (this.selectedIndex + delta % count + count) % count;
+      this.invalidate();
+   }
+
+   /** Preview scrolling keys (only while the description overflows). */
+   public handlePreviewKeys(data: string): boolean {
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
+      if (!this.preview.handleKeys(data)) return false;
+      this.invalidate();
+      return true;
    }
 
    handleInput(data: string): void {
@@ -840,14 +904,12 @@ class MultiSelectList implements Component {
       }
 
       if (matchesSelectUp(data, this.keybindings)) {
-         this.selectedIndex = this.selectedIndex === 0 ? count - 1 : this.selectedIndex - 1;
-         this.invalidate();
+         this.moveSelection(-1);
          return;
       }
 
       if (matchesSelectDown(data, this.keybindings)) {
-         this.selectedIndex = this.selectedIndex === count - 1 ? 0 : this.selectedIndex + 1;
-         this.invalidate();
+         this.moveSelection(1);
          return;
       }
 
@@ -859,6 +921,15 @@ class MultiSelectList implements Component {
             this.selectedIndex = Math.min(idx, count - 1);
             this.invalidate();
          }
+         return;
+      }
+
+      if (
+         this.isFreeformRow(this.selectedIndex)
+         && this.customText
+         && (matchesKey(data, Key.backspace) || matchesKey(data, Key.delete) || this.keybindings.matches(data, "tui.editor.deleteCharBackward"))
+      ) {
+         this.onClearCustom?.();
          return;
       }
 
@@ -876,7 +947,7 @@ class MultiSelectList implements Component {
       }
    }
 
-   /** Space on the selected row: tick the option, toggle the comment, or open the custom response. */
+   /** Space on the selected row: tick the option, toggle the comment, or open the custom-text editor. */
    private activate(): void {
       if (this.isCommentToggleRow(this.selectedIndex)) {
          this.toggleComment();
@@ -890,7 +961,11 @@ class MultiSelectList implements Component {
       this.invalidate();
    }
 
-   /** Submit the ticked options, or the selected one when none is ticked. */
+   /**
+    * Submit the ticked options, or the highlighted one when none is ticked.
+    * Saved custom text goes along (the prompt adds it), so text alone also
+    * submits. With nothing at all to send, nothing happens.
+    */
    submit(): void {
       const selectedTitles = Array.from(this.checked)
          .sort((a, b) => a - b)
@@ -898,13 +973,12 @@ class MultiSelectList implements Component {
          .filter((t): t is string => !!t);
 
       const fallback = this.options[this.selectedIndex]?.title;
-      const result = selectedTitles.length > 0 ? selectedTitles : fallback ? [fallback] : [];
+      const result = selectedTitles.length > 0 ? selectedTitles : fallback && !this.customText ? [fallback] : [];
 
-      if (result.length > 0) this.onSubmit?.(result);
-      else this.onCancel?.();
+      if (result.length > 0 || this.customText) this.onSubmit?.(result);
    }
 
-   /** The rows as shown (options with their ticks, comment toggle, custom response), for Tern's native sheet. */
+   /** The rows as shown (options with their ticks, comment toggle, custom text), for Tern's native sheet. */
    nativeSheet(): ChoiceList {
       const rows: ChoiceRow[] = this.options.map((option, index) => ({
          id: `o${index}`,
@@ -914,7 +988,11 @@ class MultiSelectList implements Component {
          on: this.checked.has(index),
       }));
       if (this.allowComment) rows.push({ id: "comment", kind: "comment", label: COMMENT_TOGGLE_LABEL, on: this.commentEnabled });
-      if (this.allowFreeform) rows.push({ id: "freeform", kind: "freeform", label: "Other" });
+      if (this.allowFreeform) {
+         rows.push(this.customText
+            ? { id: "freeform", kind: "freeform", label: `✎ “${this.customText}”`, detail: "Your text: sent with the ticked options", on: true }
+            : { id: "freeform", kind: "freeform", label: "Other" });
+      }
       return { rows, selected: this.selectedIndex };
    }
 
@@ -926,10 +1004,32 @@ class MultiSelectList implements Component {
       if (activate) this.activate();
    }
 
-   // PI_ASK_USER_MULTI_PREVIEW_PATCH_V1: responsive details pane for multi-select.
-   // The existing `singleSelectLayout: "list"` preference also disables this pane.
-   private getMultiPreviewWidths(width: number): { left: number; right: number } | null {
-      if (this.multiPreviewLayout === "list" || width < SINGLE_SELECT_SPLIT_PANE_MIN_WIDTH) return null;
+   clickTarget(target: HitTarget, clickCount: number): void {
+      if (target.kind === "clear") {
+         this.selectedIndex = this.getFreeformIndex();
+         this.onClearCustom?.();
+         return;
+      }
+      if (target.kind === "check") {
+         this.selectedIndex = target.index;
+         this.activate();
+         this.invalidate();
+         return;
+      }
+      if (target.kind !== "row") return;
+      const changed = this.selectedIndex !== target.index;
+      this.selectedIndex = target.index;
+      this.invalidate();
+      // Double-click acts like Space: tick the option, toggle the comment, edit the text.
+      if (!changed && clickCount >= 2) this.activate();
+   }
+
+   handleMouse(event: AskMouseEvent): AskMouseResult | undefined {
+      return handleListMouse(this, event);
+   }
+
+   private getSplitWidths(width: number): { left: number; right: number } | null {
+      if (width < SINGLE_SELECT_SPLIT_PANE_MIN_WIDTH) return null;
       const available = width - SINGLE_SELECT_SPLIT_PANE_SEPARATOR.length;
       if (available < SINGLE_SELECT_SPLIT_PANE_LEFT_MIN_WIDTH + SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH) return null;
       const left = Math.max(
@@ -940,201 +1040,210 @@ class MultiSelectList implements Component {
       return right >= SINGLE_SELECT_SPLIT_PANE_RIGHT_MIN_WIDTH ? { left, right } : null;
    }
 
-   private scrollPreview(delta: number): void {
-      const maxOffset = Math.max(0, this.previewTotalLines - this.previewViewportRows);
-      const next = Math.max(0, Math.min(maxOffset, this.previewScrollOffset + delta));
-      if (next !== this.previewScrollOffset) {
-         this.previewScrollOffset = next;
-         this.invalidate();
+   private subjectFor(index: number): PreviewSubject {
+      if (this.isCommentToggleRow(index)) {
+         return {
+            title: "Extra context",
+            detail: this.commentEnabled
+               ? "On. After you submit, you can add a comment explaining your choices."
+               : "Off. Press Space to add a comment after you submit.",
+         };
       }
-   }
-
-   public handlePreviewKeys(data: string): boolean {
-      if (!this.previewActive || this.previewViewportRows < 1) return false;
-      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
-      const page = Math.max(1, this.previewViewportRows - 1);
-      if (matchesKey(data, Key.alt("down")) || matchesKey(data, Key.alt("j"))) this.scrollPreview(1);
-      else if (matchesKey(data, Key.alt("up")) || matchesKey(data, Key.alt("k"))) this.scrollPreview(-1);
-      else if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.alt("pageDown"))) this.scrollPreview(page);
-      else if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.alt("pageUp"))) this.scrollPreview(-page);
-      else if (matchesKey(data, Key.alt("home"))) this.scrollPreview(-this.previewTotalLines);
-      else if (matchesKey(data, Key.alt("end"))) this.scrollPreview(this.previewTotalLines);
-      else return false;
-      return true;
-   }
-
-   handleMouse(event: { type: string; x: number; wheelDelta?: number }): { handled: boolean } | undefined {
-      // Pi's alternate-screen TUI routes normalized wheel events to components.
-      // The left list still owns its ordinary input; only the right preview scrolls.
-      if (!this.previewActive || event.type !== "wheel" || event.x < this.previewLeftWidth + 1) return undefined;
-      const delta = event.wheelDelta ?? 0;
-      if (delta === 0) return undefined;
-      this.scrollPreview(Math.trunc(delta * 3));
-      return { handled: true };
-   }
-
-   private renderMultiPreview(width: number): string[] {
-      const count = this.getItemCount();
-      if (this.previewSelectionIndex !== this.selectedIndex) {
-         this.previewSelectionIndex = this.selectedIndex;
-         this.previewScrollOffset = 0;
+      if (this.isFreeformRow(index)) {
+         return this.customText
+            ? {
+               title: "Your text",
+               badge: this.theme.fg("success", "✓ will be sent"),
+               detail: `“${this.customText}”\n\nSent together with the ticked options.\n\nEnter or Space: edit · Backspace: remove`,
+            }
+            : {
+               title: "Custom response",
+               detail: "Add your own text alongside the checked options. It is sent together with them.\n\nEnter or Space opens the editor.",
+            };
       }
-      let title: string;
-      let detail: string;
-      let status: string;
-      if (this.isCommentToggleRow(this.selectedIndex)) {
-         title = "Extra context";
-         detail = this.commentEnabled
-            ? "Enabled. You can add an explanation after selecting your choices."
-            : "Disabled. Press Space to enable additional context after selecting your choices.";
-         status = this.commentEnabled ? "Comment enabled" : "Comment disabled";
-      } else if (this.isFreeformRow(this.selectedIndex)) {
-         title = "Custom response";
-         detail = this.allowMultiple ? "Add custom text alongside the checked options." : "Enter a custom response instead of the listed options.";
-         status = "Press Space to open editor";
-      } else {
-         const option = this.options[this.selectedIndex];
-         title = option?.title ?? "No option selected";
-         detail = option?.description?.trim() || "No description provided for this option.";
-         status = this.checked.has(this.selectedIndex) ? "[✓] Selected" : "[ ] Not selected";
-      }
-      const preview = renderUniversalPreviewPane({
-         width, maxRows: this.maxVisibleRows, title, detail,
-         position: this.selectedIndex + 1, count, status,
-         scrollOffset: this.previewScrollOffset, theme: this.theme,
-      });
-      this.previewScrollOffset = preview.offset;
-      this.previewTotalLines = preview.totalLines;
-      this.previewViewportRows = preview.viewportRows;
-      return preview.lines;
+      const option = this.options[index];
+      const description = option?.description?.trim();
+      return { title: option?.title ?? "No option selected", detail: description || NO_DESCRIPTION, muted: !description };
    }
 
-   render(width: number): string[] {
-      if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
-      const panes = this.getMultiPreviewWidths(width);
-      let lines: string[];
-      if (panes) {
-         this.previewActive = true;
-         this.previewLeftWidth = panes.left;
-         const left = this.renderList(panes.left, true);
-         const right = this.renderMultiPreview(panes.right);
-         const rows = Math.min(this.maxVisibleRows, Math.max(left.length, right.length));
-         const separator = this.theme.fg("dim", SINGLE_SELECT_SPLIT_PANE_SEPARATOR);
-         lines = Array.from({ length: rows }, (_, row) =>
-            `${truncateToWidth(left[row] ?? "", panes.left, "", true)}${separator}${truncateToWidth(right[row] ?? "", panes.right, "")}`,
-         );
-      } else {
-         this.previewActive = false;
-         lines = this.renderList(width, false);
-      }
-      this.cachedWidth = width;
-      this.cachedLines = lines;
-      return lines;
-   }
-
-    private renderList(width: number, hideDescriptions: boolean): string[] {
+   /** Every list row, item by item. `hideDescriptions` keeps only titles. */
+   private titleBlocks(width: number, hideDescriptions: boolean): RowBlock[] {
       const theme = this.theme;
-      const count = this.getItemCount();
-
-      if (count === 0) return [theme.fg("warning", "No options")];
-
-      const blocks: string[][] = [];
-
-      for (let i = 0; i < count; i++) {
+      const { highlight } = listColors(theme);
+      const blocks: RowBlock[] = [];
+      for (let i = 0; i < this.getItemCount(); i++) {
          const isSelected = i === this.selectedIndex;
          const prefix = isSelected ? theme.fg("accent", "→") : " ";
-         const block: string[] = [];
-
+         const lines: string[] = [];
          if (this.isCommentToggleRow(i)) {
             const checkbox = this.commentEnabled ? theme.fg("success", "[✓]") : theme.fg("dim", "[ ]");
             const label = isSelected
                ? theme.fg("accent", theme.bold(COMMENT_TOGGLE_LABEL))
                : theme.fg("text", theme.bold(COMMENT_TOGGLE_LABEL));
-            block.push(truncateToWidth(`${prefix}   ${checkbox} ${label}`, width, ""));
-            blocks.push(block);
-            continue;
-         }
-
-         if (this.isFreeformRow(i)) {
-            const label = theme.fg("text", theme.bold("Type something."));
-            const desc = theme.fg("muted", "Enter a custom response");
-            const line = `${prefix}   ${label} ${theme.fg("dim", "—")} ${desc}`;
-            block.push(truncateToWidth(line, width, ""));
-            blocks.push(block);
-            continue;
-         }
-
-         const option = this.options[i]!;
-
-         const checkbox = this.checked.has(i) ? theme.fg("success", "[✓]") : theme.fg("dim", "[ ]");
-         const num = theme.fg("dim", `${i + 1}.`);
-         const title = isSelected
-            ? theme.fg("accent", theme.bold(option.title))
-            : theme.fg("text", theme.bold(option.title));
-
-         const firstLine = `${prefix} ${num} ${checkbox} ${title}`;
-         block.push(truncateToWidth(firstLine, width, ""));
-
-         if (option.description && !hideDescriptions) {
-            const indent = "      ";
-            const wrapWidth = Math.max(10, width - indent.length);
-            const wrapped = wrapTextWithAnsi(option.description, wrapWidth);
-            for (const w of wrapped) {
-               block.push(truncateToWidth(indent + theme.fg("muted", w), width, ""));
+            lines.push(`${prefix}   ${checkbox} ${label}`);
+         } else if (this.isFreeformRow(i)) {
+            if (this.customText) {
+               const clear = isSelected ? theme.fg("dim", "  ⌫ clear") : "";
+               const room = Math.max(4, width - 10 - visibleWidth(clear));
+               const quoted = truncateToWidth(`“${this.customText}”`, room, "…”");
+               const text = isSelected ? theme.fg("accent", theme.bold(quoted)) : theme.fg("text", quoted);
+               lines.push(`${prefix}   ${theme.fg("success", "[✓]")} ${theme.fg("accent", "✎")} ${text}${clear}`);
+            } else {
+               const label = theme.fg("text", theme.bold("Type something."));
+               lines.push(`${prefix}   ${theme.fg("dim", "[ ]")} ${label} ${theme.fg("dim", "—")} ${theme.fg("muted", "Enter a custom response")}`);
+            }
+         } else {
+            const option = this.options[i]!;
+            const checkbox = this.checked.has(i) ? theme.fg("success", "[✓]") : theme.fg("dim", "[ ]");
+            const num = theme.fg("dim", `${i + 1}.`);
+            const title = isSelected ? theme.fg("accent", theme.bold(option.title)) : theme.fg("text", theme.bold(option.title));
+            lines.push(`${prefix} ${num} ${checkbox} ${title}`);
+            if (option.description && !hideDescriptions) {
+               const indent = "      ";
+               for (const wrapped of wrapTextWithAnsi(option.description, Math.max(10, width - indent.length))) {
+                  lines.push(indent + theme.fg("muted", wrapped));
+               }
             }
          }
-
-         blocks.push(block);
+         blocks.push({
+            item: i,
+            lines: lines.map((line) => (isSelected && highlight ? paintRow(line, width, highlight) : truncateToWidth(line, width, ""))),
+         });
       }
+      return blocks;
+   }
 
-      const maxRows = this.maxVisibleRows;
-      const totalRows = blocks.reduce((sum, block) => sum + block.length, 0);
+   /** Mouse targets for list rows, given where each line went. */
+   private rowHits(items: number[], top: number, width: number): void {
+      items.forEach((item, row) => {
+         if (item < 0) return;
+         const first = row === 0 || items[row - 1] !== item;
+         if (first && item < this.options.length) {
+            const col = 3 + `${item + 1}.`.length;
+            this.hits.push({ row: top + row, rows: 1, col, cols: 3, target: { kind: "check", index: item } });
+         } else if (first && this.isCommentToggleRow(item)) {
+            this.hits.push({ row: top + row, rows: 1, col: 4, cols: 3, target: { kind: "check", index: item } });
+         } else if (first && this.isFreeformRow(item) && this.customText && item === this.selectedIndex) {
+            this.hits.push({ row: top + row, rows: 1, col: Math.max(0, width - 9), cols: 9, target: { kind: "clear" } });
+         }
+         this.hits.push({ row: top + row, rows: 1, col: 0, cols: width, target: { kind: "row", index: item } });
+      });
+   }
+
+   private previewHits(preview: PreviewRender, top: number, left: number, rows: number, cols: number): void {
+      if (preview.thumb) {
+         this.hits.push({
+            row: top, rows, col: left + preview.railCol, cols: 1,
+            target: { kind: "rail", thumbStart: preview.thumb.start, thumbEnd: preview.thumb.end, maxOffset: preview.maxOffset },
+         });
+      }
+      this.hits.push({ row: top, rows, col: left, cols, target: { kind: "preview" } });
+   }
+
+   /** Rows the option area needs to show everything without scrolling (Fix 8 "2C"), at `width`. */
+   preferredRows(width: number): number {
+      const key = `${width}`;
+      const cached = this.needCache.get(key);
+      if (cached !== undefined) return cached;
+      const mdTheme = safeMarkdownTheme();
+      const panes = this.getSplitWidths(width);
+      const layout = chooseOptionLayout(width, this.layoutPreference, panes !== null);
+      const subjects = Array.from({ length: this.getItemCount() }, (_, i) => this.subjectFor(i));
+      const docRows = (w: number, titleRow = true) => Math.max(...subjects.map((s) => previewNeedRows(this.theme, s, w, { mdTheme, titleRow })));
+      let need: number;
+      if (layout === "split") {
+         need = Math.max(this.titleBlocks(panes!.left, true).reduce((n, b) => n + b.lines.length, 0), docRows(panes!.right));
+      } else if (layout === "strip") {
+         need = this.titleBlocks(width, true).reduce((n, b) => n + b.lines.length, 0) + 1 + docRows(width);
+      } else if (layout === "accordion") {
+         need = this.titleBlocks(width, true).reduce((n, b) => n + b.lines.length, 0) + docRows(width - 6, false);
+      } else {
+         need = this.titleBlocks(width, false).reduce((n, b) => n + b.lines.length, 0);
+      }
+      need = Math.max(1, need);
+      this.needCache.set(key, need);
+      return need;
+   }
+
+   render(width: number): string[] {
+      if (this.cachedLines && this.cachedWidth === width) return this.cachedLines;
+      const theme = this.theme;
+      const count = this.getItemCount();
+      this.hits = [];
+      if (count === 0) return [theme.fg("warning", "No options")];
+
+      const mdTheme = safeMarkdownTheme();
+      const { panel } = listColors(theme);
+      const panes = this.getSplitWidths(width);
+      const layout = chooseOptionLayout(width, this.layoutPreference, panes !== null);
+      // Stable height: what the tallest option needs, within the space the prompt gives (Fix 8).
+      const rows = Math.max(1, Math.min(this.maxVisibleRows, this.preferredRows(width)));
+      const subject = this.subjectFor(this.selectedIndex);
+      const indicator = theme.fg("dim", `  (${this.selectedIndex + 1}/${count})`);
+      this.preview.follow(`${this.selectedIndex}|${this.customText}`);
+      this.preview.active = layout !== "list";
       let lines: string[];
 
-      if (totalRows <= maxRows) {
-         lines = blocks.flat();
+      if (layout === "split") {
+         const blocks = this.titleBlocks(panes!.left, true);
+         const span = blockSpan(blocks, this.selectedIndex);
+         const left = windowRows(blocks, rows, span.start, span.end, indicator);
+         const preview = renderPreviewPane(theme, subject, panes!.right, rows, this.preview.offset, { mdTheme, tint: panel });
+         this.preview.record(preview);
+         const separator = splitSeparator(theme, panel);
+         lines = Array.from({ length: rows }, (_, row) =>
+            `${truncateToWidth(left.lines[row] ?? "", panes!.left, "", true)}${separator}${preview.lines[row] ?? ""}`);
+         this.rowHits(left.items, 0, panes!.left);
+         this.hits.push({ row: 0, rows, col: 0, cols: panes!.left, target: { kind: "list" } });
+         this.previewHits(preview, 0, panes!.left + SINGLE_SELECT_SPLIT_PANE_SEPARATOR.length, rows, panes!.right);
+      } else if (layout === "strip") {
+         const blocks = this.titleBlocks(width, true);
+         const total = blocks.reduce((n, b) => n + b.lines.length, 0);
+         const listRows = Math.max(Math.min(2, rows), Math.min(total, rows - 4));
+         const separatorRows = rows - listRows >= 3 ? 1 : 0;
+         const stripRows = Math.max(1, rows - listRows - separatorRows);
+         const span = blockSpan(blocks, this.selectedIndex);
+         const left = windowRows(blocks, listRows, span.start, span.end, indicator);
+         const preview = renderPreviewPane(theme, subject, width, stripRows, this.preview.offset, { mdTheme, tint: panel });
+         this.preview.record(preview);
+         lines = [...left.lines, ...(separatorRows ? [stripSeparator(theme, width)] : []), ...preview.lines];
+         this.rowHits(left.items, 0, width);
+         this.hits.push({ row: 0, rows: left.lines.length, col: 0, cols: width, target: { kind: "list" } });
+         this.previewHits(preview, left.lines.length + separatorRows, 0, stripRows, width);
+      } else if (layout === "accordion") {
+         const blocks = this.titleBlocks(width, true);
+         const titleRows = blocks.reduce((n, b) => n + b.lines.length, 0);
+         const docWidth = width - 6;
+         const wanted = previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
+         const descRows = Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows));
+         const preview = renderPreviewPane(theme, subject, docWidth, descRows, this.preview.offset, { mdTheme, tint: panel, titleRow: false });
+         this.preview.record(preview);
+         const at = blocks.findIndex((block) => block.item === this.selectedIndex);
+         const expanded: RowBlock[] = [...blocks];
+         if (at >= 0 && descRows > 0) expanded.splice(at + 1, 0, { item: -2, lines: preview.lines.map((line) => `      ${line}`) });
+         const span = blockSpan(blocks, this.selectedIndex);
+         const window = windowRows(expanded, rows, span.start, span.end + descRows);
+         lines = window.lines;
+         this.rowHits(window.items, 0, width);
+         const descTop = window.items.indexOf(-2);
+         if (descTop >= 0) this.previewHits(preview, descTop, 6, Math.min(descRows, lines.length - descTop), docWidth);
+         this.hits.push({ row: 0, rows: lines.length, col: 0, cols: width, target: { kind: "list" } });
       } else {
-         const availableRows = maxRows > 1 ? maxRows - 1 : 1;
-         const selectedBlock = blocks[this.selectedIndex] ?? blocks[0] ?? [];
-
-         if (selectedBlock.length >= availableRows) {
-            lines = selectedBlock.slice(0, availableRows);
-         } else {
-            let startIndex = this.selectedIndex;
-            let endIndex = this.selectedIndex + 1;
-            let usedRows = selectedBlock.length;
-
-            while (true) {
-               const nextBlock = blocks[endIndex];
-               if (nextBlock && usedRows + nextBlock.length <= availableRows) {
-                  usedRows += nextBlock.length;
-                  endIndex += 1;
-                  continue;
-               }
-
-               const previousBlock = blocks[startIndex - 1];
-               if (previousBlock && usedRows + previousBlock.length <= availableRows) {
-                  startIndex -= 1;
-                  usedRows += previousBlock.length;
-                  continue;
-               }
-
-               break;
-            }
-
-            lines = blocks.slice(startIndex, endIndex).flat();
-         }
-
-         if (maxRows > 1) {
-            lines.push(theme.fg("dim", truncateToWidth(`  (${this.selectedIndex + 1}/${count})`, width, "")));
-         }
+         const blocks = this.titleBlocks(width, false);
+         const span = blockSpan(blocks, this.selectedIndex);
+         const window = windowRows(blocks, this.maxVisibleRows, span.start, span.end, indicator);
+         lines = window.lines;
+         this.rowHits(window.items, 0, width);
+         this.hits.push({ row: 0, rows: lines.length, col: 0, cols: width, target: { kind: "list" } });
       }
 
+      this.cachedWidth = width;
+      this.cachedLines = lines;
       return lines;
    }
 }
 
-class WrappedSingleSelectList implements Component {
+class WrappedSingleSelectList implements Component, ListMouseHost {
    private options: QuestionOption[];
    private allowFreeform: boolean;
    private allowComment: boolean;
@@ -1143,29 +1252,15 @@ class WrappedSingleSelectList implements Component {
    private keybindings: KeybindingsManager;
    private commentToggle: ResolvedShortcut;
    private selectedIndex = 0;
-   public selectedOptionIndex(): number | undefined {
-      const filtered = this.getFilteredOptions();
-      const option = filtered[this.selectedIndex];
-      return option ? this.options.indexOf(option) : undefined;
-   }
-   public preselect(ids: number[]): void {
-      if (ids.length) {
-         const optionIndex = this.options.findIndex((option) => (option as QuestionOption & { id?: number }).id === ids[0]);
-         if (optionIndex >= 0) this.selectedIndex = optionIndex;
-      }
-      this.invalidate();
-   }
    private searchQuery = "";
    private commentEnabled = false;
    private maxVisibleRows = 12;
-   private previewScrollOffset = 0;
-   private previewTotalLines = 0;
-   private previewViewportRows = 0;
-   private previewSelectionKey = "";
-   private previewActive = false;
-   private previewLeftWidth = 0;
    private cachedWidth?: number;
    private cachedLines?: string[];
+   private needCache = new Map<string, number>();
+   readonly preview = new PreviewScroll();
+   hits: HitRect[] = [];
+   drag?: ListMouseHost["drag"];
 
    public onCancel?: () => void;
    public onSubmit?: (result: string) => void;
@@ -1187,6 +1282,22 @@ class WrappedSingleSelectList implements Component {
       this.singleSelectLayout = singleSelectLayout;
       this.keybindings = keybindings;
       this.commentToggle = commentToggle;
+   }
+
+   /** The highlighted option's index among all options, or undefined on the comment or custom row. */
+   public selectedOptionIndex(): number | undefined {
+      const filtered = this.getFilteredOptions();
+      const option = filtered[this.selectedIndex];
+      return option ? this.options.indexOf(option) : undefined;
+   }
+
+   /** Start with the cursor on the preselected option (single-select allows one). */
+   public preselect(ids: number[]): void {
+      if (ids.length) {
+         const optionIndex = this.options.findIndex((option) => (option as IdentifiedOption).id === ids[0]);
+         if (optionIndex >= 0) this.selectedIndex = optionIndex;
+      }
+      this.invalidate();
    }
 
    public isCommentEnabled(): boolean {
@@ -1225,6 +1336,7 @@ class WrappedSingleSelectList implements Component {
    private toggleComment(): void {
       if (!this.allowComment) return;
       this.commentEnabled = !this.commentEnabled;
+      this.needCache.clear();
       this.invalidate();
    }
 
@@ -1259,7 +1371,7 @@ class WrappedSingleSelectList implements Component {
       return character;
    }
 
-   private styleListLine(line: string, width: number, isSelected: boolean): string {
+   private styleListLine(line: string, width: number, isSelected: boolean, highlight: string): string {
       const trimmed = line.trim();
 
       if (trimmed.startsWith("(")) {
@@ -1267,7 +1379,8 @@ class WrappedSingleSelectList implements Component {
       }
 
       if (isSelected) {
-         return truncateToWidth(this.theme.fg("accent", this.theme.bold(line)), width, "");
+         const styled = this.theme.fg("accent", this.theme.bold(line));
+         return highlight ? paintRow(styled, width, highlight) : truncateToWidth(styled, width, "");
       }
 
       if (line.startsWith("      ")) {
@@ -1282,7 +1395,6 @@ class WrappedSingleSelectList implements Component {
    }
 
    private getSplitPaneWidths(width: number): { left: number; right: number } | null {
-      if (this.singleSelectLayout === "list") return null;
       if (width < SINGLE_SELECT_SPLIT_PANE_MIN_WIDTH) return null;
 
       const availableWidth = width - SINGLE_SELECT_SPLIT_PANE_SEPARATOR.length;
@@ -1301,108 +1413,114 @@ class WrappedSingleSelectList implements Component {
       return { left, right };
    }
 
-   private buildListLines(width: number, filteredOptions: QuestionOption[], hideDescriptions = false): string[] {
-      const lines: string[] = [];
-      const count = this.getItemCount(filteredOptions);
+   /** The filter line, then each item's rows (descriptions included unless hidden). */
+   private titleBlocks(width: number, filteredOptions: QuestionOption[], hideDescriptions: boolean): RowBlock[] {
+      const { highlight } = listColors(this.theme);
       const searchValue = this.searchQuery ? this.theme.fg("text", this.searchQuery) : this.theme.fg("dim", "type to filter");
-      lines.push(truncateToWidth(`${this.theme.fg("accent", "Filter:")} ${searchValue}`, width, ""));
-
+      const blocks: RowBlock[] = [{ item: -1, lines: [truncateToWidth(`${this.theme.fg("accent", "Filter:")} ${searchValue}`, width, "")] }];
       if (this.searchQuery && filteredOptions.length === 0) {
-         lines.push(truncateToWidth(this.theme.fg("warning", "No matching options"), width, ""));
+         blocks.push({ item: -1, lines: [truncateToWidth(this.theme.fg("warning", "No matching options"), width, "")] });
       }
-
-      if (count === 0) {
-         if (!this.searchQuery) {
-            lines.push(truncateToWidth(this.theme.fg("warning", "No options"), width, ""));
-         }
-         return lines.slice(0, this.maxVisibleRows);
+      if (this.getItemCount(filteredOptions) === 0) {
+         if (!this.searchQuery) blocks.push({ item: -1, lines: [truncateToWidth(this.theme.fg("warning", "No options"), width, "")] });
+         return blocks;
       }
-
-      const maxRows = Math.max(1, this.maxVisibleRows - lines.length);
-      const optionRows = renderSingleSelectRows({
+      const rows = renderSingleSelectRows({
          options: filteredOptions,
          selectedIndex: this.selectedIndex,
          width,
          allowFreeform: this.allowFreeform,
          allowComment: this.allowComment,
          commentEnabled: this.commentEnabled,
-         maxRows,
          hideDescriptions,
       });
-      const optionLines = optionRows.map((row) => this.styleListLine(row.line, width, row.selected));
-
-      lines.push(...optionLines);
-      return lines.slice(0, this.maxVisibleRows);
-   }
-
-   private scrollPreview(delta: number): void {
-      const maxOffset = Math.max(0, this.previewTotalLines - this.previewViewportRows);
-      const next = Math.max(0, Math.min(maxOffset, this.previewScrollOffset + delta));
-      if (next !== this.previewScrollOffset) {
-         this.previewScrollOffset = next;
-         this.invalidate();
+      for (const row of rows) {
+         const line = this.styleListLine(row.line, width, row.selected, highlight);
+         const last = blocks[blocks.length - 1]!;
+         if (last.item === row.itemIndex && row.itemIndex >= 0) last.lines.push(line);
+         else blocks.push({ item: row.itemIndex, lines: [line] });
       }
+      return blocks;
    }
 
-   public handlePreviewKeys(data: string): boolean {
-      if (!this.previewActive || this.previewViewportRows < 1) return false;
-      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
-      const page = Math.max(1, this.previewViewportRows - 1);
-      if (matchesKey(data, Key.alt("down")) || matchesKey(data, Key.alt("j"))) this.scrollPreview(1);
-      else if (matchesKey(data, Key.alt("up")) || matchesKey(data, Key.alt("k"))) this.scrollPreview(-1);
-      else if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.alt("pageDown"))) this.scrollPreview(page);
-      else if (matchesKey(data, Key.pageUp) || matchesKey(data, Key.alt("pageUp"))) this.scrollPreview(-page);
-      else if (matchesKey(data, Key.alt("home"))) this.scrollPreview(-this.previewTotalLines);
-      else if (matchesKey(data, Key.alt("end"))) this.scrollPreview(this.previewTotalLines);
-      else return false;
-      return true;
-   }
-
-   handleMouse(event: { type: string; x: number; wheelDelta?: number }): { handled: boolean } | undefined {
-      if (!this.previewActive || event.type !== "wheel" || event.x < this.previewLeftWidth + 1) return undefined;
-      const delta = event.wheelDelta ?? 0;
-      if (delta === 0) return undefined;
-      this.scrollPreview(Math.trunc(delta * 3));
-      return { handled: true };
-   }
-
-   private buildPreviewLines(width: number, filteredOptions: QuestionOption[], maxLines: number): string[] {
-      if (maxLines <= 0) return [];
-      const count = this.getItemCount(filteredOptions);
-      const selected = filteredOptions[this.selectedIndex];
-      const key = `${this.searchQuery}\u0000${this.selectedIndex}\u0000${selected?.title ?? "special"}`;
-      if (this.previewSelectionKey !== key) {
-         this.previewSelectionKey = key;
-         this.previewScrollOffset = 0;
-      }
-      let title: string;
-      let detail: string;
-      let status: string;
-      if (this.isCommentToggleRow(this.selectedIndex, filteredOptions)) {
-         title = "Additional context";
-         detail = this.commentEnabled
-            ? "Comment enabled. Add a comment after choosing the option."
-            : "Comment disabled. Press Enter to enable an optional explanation.";
-         status = this.commentEnabled ? "Comment enabled" : "Comment disabled";
-      } else if (this.isFreeformRow(this.selectedIndex, filteredOptions)) {
-         title = "Custom response";
-         detail = "Open the editor to write any answer when none of the listed options fit.";
-         if (this.searchQuery) detail += `\n\nCurrent filter: ${this.searchQuery}`;
-         status = "Press Enter to open editor";
-      } else {
-         title = selected?.title ?? "No option selected";
-         detail = selected?.description?.trim() || "No additional details provided for this option.";
-         status = "Press Enter to select";
-      }
-      const preview = renderUniversalPreviewPane({
-         width, maxRows: maxLines, title, detail,
-         position: this.selectedIndex + 1, count, status,
-         scrollOffset: this.previewScrollOffset, theme: this.theme,
+   /** The upstream list (with its own windowing and "(n/m)" indicator), as blocks. */
+   private windowedListBlocks(width: number, filteredOptions: QuestionOption[], maxRows: number, hideDescriptions: boolean): WindowedRows {
+      const { highlight } = listColors(this.theme);
+      const head = this.titleBlocks(width, filteredOptions, true).filter((block) => block.item === -1);
+      const lines = head.flatMap((block) => block.lines);
+      const items = lines.map(() => -1);
+      if (this.getItemCount(filteredOptions) === 0) return { lines: lines.slice(0, maxRows), items: items.slice(0, maxRows) };
+      const rows = renderSingleSelectRows({
+         options: filteredOptions,
+         selectedIndex: this.selectedIndex,
+         width,
+         allowFreeform: this.allowFreeform,
+         allowComment: this.allowComment,
+         commentEnabled: this.commentEnabled,
+         maxRows: Math.max(1, maxRows - lines.length),
+         hideDescriptions,
       });
-      this.previewScrollOffset = preview.offset;
-      this.previewTotalLines = preview.totalLines;
-      this.previewViewportRows = preview.viewportRows;
-      return preview.lines;
+      for (const row of rows) {
+         lines.push(this.styleListLine(row.line, width, row.selected, highlight));
+         items.push(row.itemIndex);
+      }
+      return { lines: lines.slice(0, maxRows), items: items.slice(0, maxRows) };
+   }
+
+   private subjectFor(index: number, filteredOptions: QuestionOption[]): PreviewSubject {
+      if (this.isCommentToggleRow(index, filteredOptions)) {
+         return {
+            title: "Additional context",
+            detail: this.commentEnabled
+               ? "On. After you choose an option, you can add a comment explaining it."
+               : "Off. Press Enter to add a comment after you choose an option.",
+         };
+      }
+      if (this.isFreeformRow(index, filteredOptions)) {
+         let detail = "Open the editor to write **any** answer.\n\n*Use this when none of the listed options fit.*";
+         if (this.searchQuery) detail += `\n\nCurrent filter: \`${this.searchQuery}\``;
+         return { title: "Custom response", detail };
+      }
+      const option = filteredOptions[index];
+      const description = option?.description?.trim();
+      return { title: option?.title ?? "No option selected", detail: description || NO_DESCRIPTION, muted: !description };
+   }
+
+   /** Rows the option area needs to show everything without scrolling (Fix 8 "2C"), measured over all options. */
+   preferredRows(width: number): number {
+      const key = `${width}`;
+      const cached = this.needCache.get(key);
+      if (cached !== undefined) return cached;
+      const mdTheme = safeMarkdownTheme();
+      const all = this.options;
+      const panes = this.getSplitPaneWidths(width);
+      const layout = chooseOptionLayout(width, this.singleSelectLayout, panes !== null);
+      const subjects = Array.from({ length: this.getItemCount(all) }, (_, i) => this.subjectFor(i, all));
+      const docRows = (w: number, titleRow = true) => Math.max(...subjects.map((s) => previewNeedRows(this.theme, s, w, { mdTheme, titleRow })));
+      const titles = (w: number, hide: boolean) => this.titleBlocks(w, all, hide).reduce((n, b) => n + b.lines.length, 0);
+      let need: number;
+      if (layout === "split") need = Math.max(titles(panes!.left, true), docRows(panes!.right));
+      else if (layout === "strip") need = titles(width, true) + 1 + docRows(width);
+      else if (layout === "accordion") need = titles(width, true) + docRows(width - 6, false);
+      else need = titles(width, false);
+      need = Math.max(1, need);
+      this.needCache.set(key, need);
+      return need;
+   }
+
+   moveSelection(delta: number): void {
+      const count = this.getItemCount(this.getFilteredOptions());
+      if (count === 0) return;
+      this.selectedIndex = (this.selectedIndex + delta % count + count) % count;
+      this.invalidate();
+   }
+
+   /** Preview scrolling keys (only while the description overflows). */
+   public handlePreviewKeys(data: string): boolean {
+      if (this.allowComment && !this.commentToggle.disabled && this.commentToggle.matches(data)) return false;
+      if (!this.preview.handleKeys(data)) return false;
+      this.invalidate();
+      return true;
    }
 
    /** Enter on the selected row: toggle the comment, open the custom response, or choose the option. */
@@ -1419,6 +1537,11 @@ class WrappedSingleSelectList implements Component {
       const result = filteredOptions[this.selectedIndex]?.title;
       if (result) this.onSubmit?.(result);
       else this.onCancel?.();
+   }
+
+   /** Enter on the highlighted row (the action bar's Select button). */
+   public confirmSelected(): void {
+      this.confirm(this.getFilteredOptions());
    }
 
    /** The rows as shown (filtered options, comment toggle, custom response), for Tern's native sheet. */
@@ -1441,6 +1564,25 @@ class WrappedSingleSelectList implements Component {
       this.selectedIndex = row;
       this.invalidate();
       if (activate) this.confirm(filteredOptions);
+   }
+
+   clickTarget(target: HitTarget, clickCount: number): void {
+      if (target.kind !== "row" && target.kind !== "check") return;
+      const filteredOptions = this.getFilteredOptions();
+      if (target.kind === "check") {
+         this.selectedIndex = target.index;
+         this.toggleComment();
+         return;
+      }
+      const changed = this.selectedIndex !== target.index;
+      this.selectedIndex = target.index;
+      this.invalidate();
+      // Double-click acts like Enter: choose the option, toggle the comment, open the editor.
+      if (!changed && clickCount >= 2) this.confirm(filteredOptions);
+   }
+
+   handleMouse(event: AskMouseEvent): AskMouseResult | undefined {
+      return handleListMouse(this, event);
    }
 
    handleInput(data: string): void {
@@ -1511,33 +1653,94 @@ class WrappedSingleSelectList implements Component {
          return this.cachedLines;
       }
 
+      const theme = this.theme;
       const filteredOptions = this.getFilteredOptions();
       const count = this.getItemCount(filteredOptions);
       this.selectedIndex = count > 0 ? Math.max(0, Math.min(this.selectedIndex, count - 1)) : 0;
+      this.hits = [];
 
-      const splitPane = this.getSplitPaneWidths(width);
+      const mdTheme = safeMarkdownTheme();
+      const { panel } = listColors(theme);
+      const panes = this.getSplitPaneWidths(width);
+      const layout = chooseOptionLayout(width, this.singleSelectLayout, panes !== null);
+      const rows = Math.max(1, Math.min(this.maxVisibleRows, this.preferredRows(width)));
+      const subject = this.subjectFor(this.selectedIndex, filteredOptions);
+      this.preview.follow(`${this.searchQuery}\u0000${this.selectedIndex}\u0000${subject.title}`);
+      this.preview.active = layout !== "list";
       let lines: string[];
 
-      if (!splitPane) {
-         this.previewActive = false;
-         lines = this.buildListLines(width, filteredOptions);
+      if (layout === "split") {
+         const left = this.windowedListBlocks(panes!.left, filteredOptions, rows, true);
+         const preview = renderPreviewPane(theme, subject, panes!.right, rows, this.preview.offset, { mdTheme, tint: panel });
+         this.preview.record(preview);
+         const separator = splitSeparator(theme, panel);
+         lines = Array.from({ length: rows }, (_, row) =>
+            `${truncateToWidth(left.lines[row] ?? "", panes!.left, "", true)}${separator}${preview.lines[row] ?? ""}`);
+         this.rowHits(left.items, 0, panes!.left);
+         this.hits.push({ row: 0, rows, col: 0, cols: panes!.left, target: { kind: "list" } });
+         this.previewHits(preview, 0, panes!.left + SINGLE_SELECT_SPLIT_PANE_SEPARATOR.length, rows, panes!.right);
+      } else if (layout === "strip") {
+         const total = this.titleBlocks(width, filteredOptions, true).reduce((n, b) => n + b.lines.length, 0);
+         const listRows = Math.max(Math.min(2, rows), Math.min(total, rows - 4));
+         const separatorRows = rows - listRows >= 3 ? 1 : 0;
+         const stripRows = Math.max(1, rows - listRows - separatorRows);
+         const left = this.windowedListBlocks(width, filteredOptions, listRows, true);
+         const preview = renderPreviewPane(theme, subject, width, stripRows, this.preview.offset, { mdTheme, tint: panel });
+         this.preview.record(preview);
+         lines = [...left.lines, ...(separatorRows ? [stripSeparator(theme, width)] : []), ...preview.lines];
+         this.rowHits(left.items, 0, width);
+         this.hits.push({ row: 0, rows: left.lines.length, col: 0, cols: width, target: { kind: "list" } });
+         this.previewHits(preview, left.lines.length + separatorRows, 0, stripRows, width);
+      } else if (layout === "accordion") {
+         const blocks = this.titleBlocks(width, filteredOptions, true);
+         const titleRows = blocks.reduce((n, b) => n + b.lines.length, 0);
+         const docWidth = width - 6;
+         const wanted = previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
+         const descRows = Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows));
+         const preview = renderPreviewPane(theme, subject, docWidth, descRows, this.preview.offset, { mdTheme, tint: panel, titleRow: false });
+         this.preview.record(preview);
+         const at = blocks.findIndex((block) => block.item === this.selectedIndex);
+         const expanded: RowBlock[] = [...blocks];
+         if (at >= 0 && descRows > 0) expanded.splice(at + 1, 0, { item: -2, lines: preview.lines.map((line) => `      ${line}`) });
+         const span = blockSpan(blocks, this.selectedIndex);
+         const window = windowRows(expanded, rows, span.start, span.end + descRows);
+         lines = window.lines;
+         this.rowHits(window.items, 0, width);
+         const descTop = window.items.indexOf(-2);
+         if (descTop >= 0) this.previewHits(preview, descTop, 6, Math.min(descRows, lines.length - descTop), docWidth);
+         this.hits.push({ row: 0, rows: lines.length, col: 0, cols: width, target: { kind: "list" } });
       } else {
-         this.previewActive = true;
-         this.previewLeftWidth = splitPane.left;
-         const listLines = this.buildListLines(splitPane.left, filteredOptions, true);
-         const previewLines = this.buildPreviewLines(splitPane.right, filteredOptions, this.maxVisibleRows);
-         const rowCount = Math.min(this.maxVisibleRows, Math.max(listLines.length, previewLines.length));
-         const separator = this.theme.fg("dim", SINGLE_SELECT_SPLIT_PANE_SEPARATOR);
-         lines = Array.from({ length: rowCount }, (_, index) => {
-            const left = truncateToWidth(listLines[index] ?? "", splitPane.left, "", true);
-            const right = truncateToWidth(previewLines[index] ?? "", splitPane.right, "");
-            return `${left}${separator}${right}`;
-         });
+         const window = this.windowedListBlocks(width, filteredOptions, this.maxVisibleRows, false);
+         lines = window.lines;
+         this.rowHits(window.items, 0, width);
+         this.hits.push({ row: 0, rows: lines.length, col: 0, cols: width, target: { kind: "list" } });
       }
 
       this.cachedWidth = width;
       this.cachedLines = lines;
       return lines;
+   }
+
+   private rowHits(items: number[], top: number, width: number): void {
+      const filteredOptions = this.getFilteredOptions();
+      items.forEach((item, row) => {
+         if (item < 0) return;
+         const first = row === 0 || items[row - 1] !== item;
+         if (first && this.isCommentToggleRow(item, filteredOptions)) {
+            this.hits.push({ row: top + row, rows: 1, col: 4, cols: 3, target: { kind: "check", index: item } });
+         }
+         this.hits.push({ row: top + row, rows: 1, col: 0, cols: width, target: { kind: "row", index: item } });
+      });
+   }
+
+   private previewHits(preview: PreviewRender, top: number, left: number, rows: number, cols: number): void {
+      if (preview.thumb) {
+         this.hits.push({
+            row: top, rows, col: left + preview.railCol, cols: 1,
+            target: { kind: "rail", thumbStart: preview.thumb.start, thumbEnd: preview.thumb.end, maxOffset: preview.maxOffset },
+         });
+      }
+      this.hits.push({ row: top, rows, col: left, cols, target: { kind: "preview" } });
    }
 }
 
@@ -1847,7 +2050,7 @@ class AskComponent extends Container {
 
    private getContextToggleKey(): string {
       const reserved = new Set(
-         [this.shortcuts.overlayToggle, this.shortcuts.commentToggle]
+         [this.shortcuts.overlayToggle, this.shortcuts.commentToggle, this.shortcuts.fullscreenToggle]
             .filter((shortcut) => !shortcut.disabled)
             .map((shortcut) => shortcut.spec),
       );
@@ -3110,6 +3313,28 @@ function resolvePromptSettings(params: AskParams): PromptSettings {
    const envDisplayMode: AskDisplayMode | undefined =
       envMode === "overlay" || envMode === "inline" || envMode === "adaptive" || envMode === "fullscreen" ? envMode : undefined;
    const envSingleSelectLayout = process.env.PI_ASK_USER_SINGLE_SELECT_LAYOUT?.trim().toLowerCase();
+   const overlayToggle = resolveShortcut(
+      params.overlayToggleKey,
+      process.env.PI_ASK_USER_OVERLAY_TOGGLE_KEY,
+      settings.overlayToggleKey,
+      DEFAULT_OVERLAY_TOGGLE_KEY,
+   );
+   const commentToggle = resolveShortcut(
+      params.commentToggleKey,
+      process.env.PI_ASK_USER_COMMENT_TOGGLE_KEY,
+      settings.commentToggleKey,
+      DEFAULT_COMMENT_TOGGLE_KEY,
+   );
+   let fullscreenToggle = resolveShortcut(
+      params.fullscreenToggleKey,
+      process.env.PI_ASK_USER_FULLSCREEN_TOGGLE_KEY,
+      settings.fullscreenToggleKey,
+      DEFAULT_FULLSCREEN_TOGGLE_KEY,
+   );
+   // A key can do only one thing: the hide and comment keys keep theirs.
+   if (!fullscreenToggle.disabled && [overlayToggle, commentToggle].some((other) => !other.disabled && other.spec === fullscreenToggle.spec)) {
+      fullscreenToggle = DISABLED_SHORTCUT;
+   }
    return {
       displayMode: params.displayMode ?? envDisplayMode ?? settings.displayMode ?? "overlay",
       singleSelectLayout: params.singleSelectLayout
@@ -3125,18 +3350,9 @@ function resolvePromptSettings(params: AskParams): PromptSettings {
          ?? settings.contextExpanded
          ?? false,
       shortcuts: {
-         overlayToggle: resolveShortcut(
-            params.overlayToggleKey,
-            process.env.PI_ASK_USER_OVERLAY_TOGGLE_KEY,
-            settings.overlayToggleKey,
-            DEFAULT_OVERLAY_TOGGLE_KEY,
-         ),
-         commentToggle: resolveShortcut(
-            params.commentToggleKey,
-            process.env.PI_ASK_USER_COMMENT_TOGGLE_KEY,
-            settings.commentToggleKey,
-            DEFAULT_COMMENT_TOGGLE_KEY,
-         ),
+         overlayToggle,
+         commentToggle,
+         fullscreenToggle,
       },
    };
 }
@@ -3156,6 +3372,7 @@ interface CustomPromptRequest<T> {
    timeout?: number;
    displayMode: AskDisplayMode;
    overlayToggle: ResolvedShortcut;
+   fullscreenToggle: ResolvedShortcut;
    createComponent: (
       tui: TUI,
       theme: Theme,
@@ -3168,12 +3385,12 @@ interface CustomPromptRequest<T> {
 
 /**
  * Show one custom-UI prompt and own every resource it needs: the abort
- * listener, the timeout timer, and the overlay-toggle terminal listener.
+ * listener, the timeout timer, and the hide/fullscreen terminal listener.
  * Completion is guarded so a late timer, abort, or keypress cannot resolve
  * twice, and every resource is released however the prompt ends.
  */
 async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptRequest<T>): Promise<T | null> {
-   const { signal, timeout, displayMode, overlayToggle } = request;
+   const { signal, timeout, displayMode, overlayToggle, fullscreenToggle } = request;
    let overlayHandle: OverlayHandle | undefined;
    let removeOverlayInputListener: (() => void) | undefined;
    let customTimer: ReturnType<typeof setTimeout> | undefined;
@@ -3208,58 +3425,54 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
          return activeComponent;
       };
 
-      // Register a raw terminal input listener for the overlay-toggle key so the
-      // overlay can be toggled even while it is hidden (hidden overlays do not
-      // receive input). Inline mode does not need this because the prompt is
-      // already non-modal. Skipped entirely if the user disabled the shortcut.
+      // One raw terminal input listener owns the prompt's window keys, so they
+      // work even while the overlay is hidden (hidden overlays do not receive
+      // input): the hide/show key and the fullscreen key. Inline mode needs
+      // neither, because it has no overlay to hide or resize.
+      const resizeOverlay = (mode: AskDisplayMode) => {
+         const bounds = overlayOptions?.overlayOptions;
+         if (!bounds) return;
+         // pi reads overlay options by reference on every render, so resizing in place is enough.
+         bounds.width = mode === "fullscreen" ? "100%" : ASK_OVERLAY_WIDTH;
+         bounds.minWidth = mode === "fullscreen" ? 1 : ASK_OVERLAY_MIN_WIDTH;
+         bounds.maxHeight = mode === "fullscreen" ? "100%" : mode === "adaptive" ? "65%" : "85%";
+         bounds.margin = mode === "fullscreen" ? 0 : 1;
+      };
       if (
          displayMode !== "inline"
-         && !overlayToggle.disabled
+         && (!overlayToggle.disabled || !fullscreenToggle.disabled)
          && typeof ui.onTerminalInput === "function"
       ) {
          removeOverlayInputListener = ui.onTerminalInput((data) => {
-            if (!overlayToggle.matches(data) || !overlayHandle) return undefined;
+            const isHideKey = overlayToggle.matches(data) && !!overlayHandle;
+            const isFullscreenKey = !isHideKey && fullscreenToggle.matches(data) && !!activeTui && !!overlayOptions?.overlayOptions;
+            if (!isHideKey && !isFullscreenKey) return undefined;
             // Kitty's progressive keyboard protocol reports press, repeat,
-            // and release as separate events. Toggle only on the initial
-            // press; otherwise one physical keypress can immediately hide
-            // and re-show the overlay. Still consume repeat/release events
-            // so they do not reach the component focused behind it.
+            // and release as separate events. Act only on the initial press;
+            // otherwise one physical keypress can toggle twice. Still consume
+            // repeat/release events so they do not reach the component
+            // focused behind it.
             if (isKeyRepeat(data) || isKeyRelease(data)) return { consume: true };
-            const nextHidden = !overlayHandle.isHidden();
-            overlayHandle.setHidden(nextHidden);
-            if (nextHidden && !hasAnnouncedHide) {
-               hasAnnouncedHide = true;
-               ui.notify?.(`ask_user hidden — press ${overlayToggle.spec} to reopen`, "info");
+            if (isHideKey) {
+               const nextHidden = !overlayHandle!.isHidden();
+               overlayHandle!.setHidden(nextHidden);
+               if (nextHidden && !hasAnnouncedHide) {
+                  hasAnnouncedHide = true;
+                  ui.notify?.(`ask_user hidden — press ${overlayToggle.spec} to reopen`, "info");
+               }
+               return { consume: true };
             }
+            if (overlayHandle?.isHidden()) return { consume: true };
+            currentDisplayMode = currentDisplayMode === "fullscreen" ? initialDisplayMode : "fullscreen";
+            resizeOverlay(currentDisplayMode);
+            const component = activeComponent as (Component & { setDisplayMode?: (mode: AskDisplayMode) => void }) | undefined;
+            component?.setDisplayMode?.(currentDisplayMode);
+            activeTui!.requestRender();
             return { consume: true };
          });
       }
 
-      // Alt+Shift+F: toggle full-screen on an already mounted overlay.
-      // Native inline custom UI has no overlay to resize, so it is unchanged.
-      let removeFullscreenInputListener: (() => void) | undefined;
-      if (displayMode !== "inline" && typeof ui.onTerminalInput === "function") {
-         removeFullscreenInputListener = ui.onTerminalInput((data) => {
-            if (!matchesKey(data, "alt+shift+f" as any) || !activeTui || !overlayOptions?.overlayOptions) return undefined;
-            if (isKeyRepeat(data) || isKeyRelease(data)) return { consume: true };
-            currentDisplayMode = currentDisplayMode === "fullscreen" ? initialDisplayMode : "fullscreen";
-            const bounds = overlayOptions.overlayOptions;
-            bounds.width = currentDisplayMode === "fullscreen" ? "100%" : ASK_OVERLAY_WIDTH;
-            bounds.minWidth = currentDisplayMode === "fullscreen" ? 1 : ASK_OVERLAY_MIN_WIDTH;
-            bounds.maxHeight = currentDisplayMode === "fullscreen" ? "100%" : currentDisplayMode === "adaptive" ? "65%" : "85%";
-            bounds.margin = currentDisplayMode === "fullscreen" ? 0 : 1;
-            const component = activeComponent as (Component & { setDisplayMode?: (mode: AskDisplayMode) => void }) | undefined;
-            component?.setDisplayMode?.(currentDisplayMode);
-            activeTui.requestRender();
-            return { consume: true };
-         });
-      }
-      let customResult: T | null | undefined;
-      try {
-         customResult = signal?.aborted ? null : await ui.custom<T | null>(customFactory, overlayOptions);
-      } finally {
-         removeFullscreenInputListener?.();
-      }
+      const customResult = signal?.aborted ? null : await ui.custom<T | null>(customFactory, overlayOptions);
 
       if (signal?.aborted) return null;
       if (customResult !== undefined) return customResult;
@@ -3450,6 +3663,7 @@ async function executeBatch(
          signal: batch.signal,
          displayMode: settings.displayMode,
          overlayToggle: settings.shortcuts.overlayToggle,
+            fullscreenToggle: settings.shortcuts.fullscreenToggle,
          createComponent: (tui, theme, keybindings, complete) =>
             new BatchAskComponent(questions, settings, tui, theme, keybindings, complete, heading),
          fallback: () => askBatchViaDialogs(ctx.ui, questions, settings.allowComment, batch.signal, deadline, heading),
@@ -3646,6 +3860,12 @@ export default function(pi: ExtensionAPI) {
                   "Shortcut for toggling the optional comment/extra-context row when allowComment is true, e.g. 'ctrl+g'. Pass 'off' to disable. Default: PI_ASK_USER_COMMENT_TOGGLE_KEY env var, then commentToggleKey in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'ctrl+g'.",
             }),
          ),
+         fullscreenToggleKey: Type.Optional(
+            Type.String({
+               description:
+                  "Shortcut that switches the open prompt between its normal size and fullscreen (overlay, adaptive and fullscreen modes), e.g. 'alt+m' or 'f11'. Pass 'off' to disable. Default: PI_ASK_USER_FULLSCREEN_TOGGLE_KEY env var, then fullscreenToggleKey in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'alt+m'. Omit to respect the user's configured preference.",
+            }),
+         ),
          timeout: Type.Optional(
             Type.Number({ description: "Auto-dismiss after N milliseconds. Returns null (cancelled) when expired." }),
          ),
@@ -3741,6 +3961,7 @@ export default function(pi: ExtensionAPI) {
             timeout,
             displayMode: settings.displayMode,
             overlayToggle: settings.shortcuts.overlayToggle,
+            fullscreenToggle: settings.shortcuts.fullscreenToggle,
             createComponent: (tui, theme, keybindings, complete) => new AskComponent(
                question,
                normalizedContext,

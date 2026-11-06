@@ -15,6 +15,7 @@ export interface AskUserSettings {
    contextExpanded?: boolean;
    overlayToggleKey?: string;
    commentToggleKey?: string;
+   fullscreenToggleKey?: string;
    emitFullEvents?: boolean;
 }
 
@@ -75,6 +76,9 @@ export function loadAskUserSettings(filePath: string = getAskUserSettingsPath())
    }
    if (typeof source.commentToggleKey === "string" && source.commentToggleKey.trim().length > 0) {
       settings.commentToggleKey = source.commentToggleKey;
+   }
+   if (typeof source.fullscreenToggleKey === "string" && source.fullscreenToggleKey.trim().length > 0) {
+      settings.fullscreenToggleKey = source.fullscreenToggleKey;
    }
    if (typeof source.emitFullEvents === "boolean") settings.emitFullEvents = source.emitFullEvents;
    return settings;

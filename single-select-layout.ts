@@ -8,6 +8,8 @@ export interface QuestionOption {
 export interface AnnotatedRow {
 	line: string;
 	selected: boolean;
+	/** The item this row belongs to (options, then comment toggle, then freeform), or -1 for the position indicator. */
+	itemIndex: number;
 }
 
 export interface RenderSingleSelectRowsParams {
@@ -102,6 +104,7 @@ function flatten(blocks: ItemBlock[], selectedIndex: number): AnnotatedRow[] {
 		block.lines.map((line) => ({
 			line,
 			selected: block.itemIndex === selectedIndex,
+			itemIndex: block.itemIndex,
 		})),
 	);
 }
@@ -135,8 +138,9 @@ export function renderSingleSelectRows({
 		const visible = selectedBlock.lines.slice(0, availableRows).map((line) => ({
 			line,
 			selected: true,
+			itemIndex: selectedBlock.itemIndex,
 		}));
-		if (safeMaxRows > 1) visible.push({ line: indicator, selected: false });
+		if (safeMaxRows > 1) visible.push({ line: indicator, selected: false, itemIndex: -1 });
 		return visible.slice(0, safeMaxRows);
 	}
 
@@ -163,6 +167,6 @@ export function renderSingleSelectRows({
 	}
 
 	const visible = flatten(blocks.slice(start, end), selectedIndex);
-	visible.push({ line: indicator, selected: false });
+	visible.push({ line: indicator, selected: false, itemIndex: -1 });
 	return visible.slice(0, safeMaxRows);
 }
