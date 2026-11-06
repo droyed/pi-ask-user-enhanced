@@ -9,6 +9,8 @@ const [tarball] = Array.isArray(packed) ? packed : Object.values(packed);
 const expectedFiles = [
   "LICENSE",
   "README.md",
+  "ENHANCED.md",
+  "enhanced-ui.ts",
   "index.ts",
   "settings.ts",
   "package.json",

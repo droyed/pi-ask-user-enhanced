@@ -49,8 +49,14 @@ assert.throws(
    () => validate({ questions: ["A?", "B?", "C?", "D?", "E?"].map((question) => ({ question })) }),
    "questions accepts at most 4 entries",
 );
+// Enhanced build: numbered options validate in the real host validator (ids are numbers with multipleOf 1,
+// not Type.Integer, so hosts with limited TypeBox shims still register the tool).
+assert.doesNotThrow(() => validate({ question: "Pick", options: [{ id: 1, title: "A" }, { id: 2, title: "B" }], preselectedIds: [2], allowMultiple: true }));
+assert.throws(() => validate({ question: "Pick", options: [{ id: 1.5, title: "A" }] }), "option ids must be whole numbers");
+assert.throws(() => validate({ question: "Pick", options: [{ id: 0, title: "A" }] }), "option ids start at 1");
+assert.equal(tool.parameters.properties.fullscreenToggleKey.type, "string");
 for (const [name, values] of Object.entries({
-   displayMode: ["overlay", "inline"],
+   displayMode: ["overlay", "inline", "adaptive", "fullscreen"],
    singleSelectLayout: ["auto", "list"],
 })) {
    const schema = tool.parameters.properties[name];

@@ -171,9 +171,8 @@ function safeMarkdownTheme(): MarkdownTheme | undefined {
 type AskOptionInput = QuestionOption | string;
 type IdentifiedOption = QuestionOption & { id?: number };
 
-
+/** overlay: centered popup; inline: in the conversation; adaptive: popup sized to the options (up to 65%); fullscreen: the whole terminal. */
 type AskDisplayMode = "overlay" | "inline" | "adaptive" | "fullscreen";
-// PI_ASK_USER_FULLSCREEN_V4: explicit modes, no prompt-only fallbacks.
 type AskSingleSelectLayout = "auto" | "list";
 
 interface BatchQuestionInput {
@@ -4041,6 +4040,8 @@ export default function(pi: ExtensionAPI) {
          "Use questions (2-4 entries) only for independent decisions whose prerequisites are already settled; ask anything that depends on another answer in a later ask_user call.",
          "With questions, put every question inside questions. A top-level question is only shown as the batch heading and is never asked or answered.",
          "Do not combine multiple numbered, multipart, or unrelated questions into one question's text.",
+         "To refer to options by number in later steps, give every option a unique positive integer id; answers then include selectedIds. Use preselectedIds to start with options already ticked (one at most for single-select).",
+         "In multi-select answers, a combined response carries the ticked selections plus the user's own text; treat the text as part of the answer.",
       ],
       // Block other tool calls in the same assistant turn until the user answers,
       // so the model can't batch ask_user with bash/edit/write and let those run
@@ -4067,12 +4068,12 @@ export default function(pi: ExtensionAPI) {
                      Type.Boolean({ description: "Add a freeform text option. Default: true" }),
                   ),
                   preselectedIds: Type.Optional(Type.Array(Type.Number({ minimum: 1, multipleOf: 1 }),
-                     { description: "Initial checked option IDs for this batch question; at most one in single-select" })),
+                     { description: "Option ids to start with already ticked for this question (needs an id on every option); at most one when allowMultiple is false. An empty array means none." })),
                }),
                {
                   minItems: BATCH_MIN_QUESTIONS,
                   maxItems: BATCH_MAX_QUESTIONS,
-                  description: "2-4 independent questions shown together, used instead of question. Set context, options, allowMultiple, and allowFreeform on each entry; the remaining parameters apply to the whole batch.",
+                  description: "2-4 independent questions shown together, used instead of question. Set context, options, allowMultiple, allowFreeform, and preselectedIds on each entry (top-level values for them are ignored); the remaining parameters apply to the whole batch.",
                },
             ),
          ),
@@ -4091,13 +4092,13 @@ export default function(pi: ExtensionAPI) {
             Type.Boolean({ description: "Add a freeform text option. Default: true" }),
          ),
          preselectedIds: Type.Optional(Type.Array(Type.Number({ minimum: 1, multipleOf: 1 }),
-            { description: "IDs of options to preselect; requires numeric IDs on all options" })),
+            { description: "Option ids to start with already ticked (needs an id on every option); at most one when allowMultiple is false. An empty array means none. Ignored when questions is used." })),
          allowComment: Type.Optional(
             Type.Boolean({ description: "Collect an optional comment after selecting one or more options. Default: PI_ASK_USER_ALLOW_COMMENT env var or allowComment in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR) if set, otherwise false." }),
          ),
          displayMode: Type.Optional(
             StringEnum(["overlay", "inline", "adaptive", "fullscreen"] as const, {
-               description: "UI rendering mode. 'overlay' shows a centered modal, 'inline' renders in-place, 'adaptive' uses 65% terminal height, 'fullscreen' fills the terminal. Default: PI_ASK_USER_DISPLAY_MODE env var, then displayMode in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'overlay'. Omit to respect the user's configured preference.",
+               description: "UI rendering mode. 'overlay' shows a centered modal, 'inline' renders in-place, 'adaptive' is a modal sized to fit the options' descriptions (up to 65% of the terminal height), 'fullscreen' fills the terminal. The user can switch to fullscreen and back with the fullscreen key (alt+m by default). Default: PI_ASK_USER_DISPLAY_MODE env var, then displayMode in ~/.pi/agent/ask-user.json (respecting PI_CODING_AGENT_DIR), otherwise 'overlay'. Omit to respect the user's configured preference.",
             }),
          ),
          singleSelectLayout: Type.Optional(
