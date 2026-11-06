@@ -1214,15 +1214,16 @@ class MultiSelectList implements Component, ListMouseHost {
          const blocks = this.titleBlocks(width, true);
          const titleRows = blocks.reduce((n, b) => n + b.lines.length, 0);
          const docWidth = width - 6;
-         const wanted = previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
-         const descRows = Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows));
-         const preview = renderPreviewPane(theme, subject, docWidth, descRows, this.preview.offset, { mdTheme, tint: panel, titleRow: false });
-         this.preview.record(preview);
+         // Options without a description don't expand: there is nothing to show.
+         const wanted = subject.muted ? 0 : previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
+         const descRows = wanted ? Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows)) : 0;
+         const preview = renderPreviewPane(theme, subject, docWidth, Math.max(1, descRows), this.preview.offset, { mdTheme, tint: panel, titleRow: false });
+         this.preview.record(descRows ? preview : { offset: 0, total: 0, viewport: 0 });
          const at = blocks.findIndex((block) => block.item === this.selectedIndex);
          const expanded: RowBlock[] = [...blocks];
          if (at >= 0 && descRows > 0) expanded.splice(at + 1, 0, { item: -2, lines: preview.lines.map((line) => `      ${line}`) });
          const span = blockSpan(blocks, this.selectedIndex);
-         const window = windowRows(expanded, rows, span.start, span.end + descRows);
+         const window = windowRows(expanded, rows, span.start, span.end + descRows, indicator);
          lines = window.lines;
          this.rowHits(window.items, 0, width);
          const descTop = window.items.indexOf(-2);
@@ -1665,6 +1666,7 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
       const layout = chooseOptionLayout(width, this.singleSelectLayout, panes !== null);
       const rows = Math.max(1, Math.min(this.maxVisibleRows, this.preferredRows(width)));
       const subject = this.subjectFor(this.selectedIndex, filteredOptions);
+      const indicator = theme.fg("dim", `  (${this.selectedIndex + 1}/${count})`);
       this.preview.follow(`${this.searchQuery}\u0000${this.selectedIndex}\u0000${subject.title}`);
       this.preview.active = layout !== "list";
       let lines: string[];
@@ -1695,15 +1697,16 @@ class WrappedSingleSelectList implements Component, ListMouseHost {
          const blocks = this.titleBlocks(width, filteredOptions, true);
          const titleRows = blocks.reduce((n, b) => n + b.lines.length, 0);
          const docWidth = width - 6;
-         const wanted = previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
-         const descRows = Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows));
-         const preview = renderPreviewPane(theme, subject, docWidth, descRows, this.preview.offset, { mdTheme, tint: panel, titleRow: false });
-         this.preview.record(preview);
+         // Options without a description don't expand: there is nothing to show.
+         const wanted = subject.muted ? 0 : previewNeedRows(theme, subject, docWidth, { mdTheme, titleRow: false });
+         const descRows = wanted ? Math.max(Math.min(2, wanted), Math.min(wanted, rows - titleRows)) : 0;
+         const preview = renderPreviewPane(theme, subject, docWidth, Math.max(1, descRows), this.preview.offset, { mdTheme, tint: panel, titleRow: false });
+         this.preview.record(descRows ? preview : { offset: 0, total: 0, viewport: 0 });
          const at = blocks.findIndex((block) => block.item === this.selectedIndex);
          const expanded: RowBlock[] = [...blocks];
          if (at >= 0 && descRows > 0) expanded.splice(at + 1, 0, { item: -2, lines: preview.lines.map((line) => `      ${line}`) });
          const span = blockSpan(blocks, this.selectedIndex);
-         const window = windowRows(expanded, rows, span.start, span.end + descRows);
+         const window = windowRows(expanded, rows, span.start, span.end + descRows, indicator);
          lines = window.lines;
          this.rowHits(window.items, 0, width);
          const descTop = window.items.indexOf(-2);
@@ -1765,6 +1768,14 @@ class AskComponent extends Container {
    private onDone: (result: AskUIResult | null) => void;
 
    private mode: AskMode = "select";
+   /** Multi-select custom text, saved with Enter in the editor and sent with the ticked options (Fix 1). */
+   private customText = "";
+   /** Whether the help line currently describes PgUp/PgDn as scrolling the preview (Fix 2). */
+   private hintedOverflow = false;
+   /** Where the option area and the action bar were drawn, for mouse events (Fix 11). */
+   private promptMouseLayout?: { modeTop: number; modeRows: number; helpTop: number; barHits: HitRect[] };
+   /** Switches the overlay between its size and fullscreen; set by the prompt runner when a key is configured. */
+   private toggleFullscreen?: () => void;
    private pendingSelections: string[] = [];
    private pendingSelectedIds?: number[];
    private pendingCombinedText = "";
@@ -1900,6 +1911,33 @@ class AskComponent extends Container {
    }
 
    override render(width: number): string[] {
+      let lines = this.renderFrame(width);
+      // The preview only claims PgUp/PgDn while its text overflows, which is
+      // known after the option area is drawn: refresh the hint and redraw once.
+      const overflow = this.previewOverflows();
+      if (overflow !== this.hintedOverflow) {
+         this.hintedOverflow = overflow;
+         this.updateHelpText();
+         lines = this.renderFrame(width);
+      }
+      return lines;
+   }
+
+   private activeList(): MultiSelectList | WrappedSingleSelectList | undefined {
+      if (this.mode !== "select") return undefined;
+      return this.allowMultiple ? this.multiSelectList : this.singleSelectList;
+   }
+
+   private previewOverflows(): boolean {
+      return !!this.activeList()?.preview.overflow;
+   }
+
+   /** True for multi-select questions whose custom text is kept and sent with the ticks (Fix 1). */
+   private usesCustomTextRow(): boolean {
+      return this.allowMultiple && this.allowFreeform && this.options.length > 0;
+   }
+
+   private renderFrame(width: number): string[] {
       const innerWidth = Math.max(1, width - BOX_BORDER_OVERHEAD);
 
       if (this.displayMode === "overlay" || this.displayMode === "adaptive" || this.displayMode === "fullscreen") {
@@ -1919,13 +1957,23 @@ class AskComponent extends Container {
       if (this.contextExpanded) {
          return this.renderOverlayLayout(width, innerWidth);
       }
+      const promptLines = this.buildPromptLines(innerWidth, fullContextLines);
+      const modeLines = this.modeContainer.render(innerWidth);
+      const bar = this.renderActionBarLine(innerWidth);
       const bodyLines = [
-         ...this.buildPromptLines(innerWidth, fullContextLines),
+         ...promptLines,
          "",
-         ...this.modeContainer.render(innerWidth),
+         ...modeLines,
          "",
+         ...(bar ? [bar.line] : []),
          ...this.helpText.render(innerWidth),
       ];
+      this.promptMouseLayout = {
+         modeTop: promptLines.length + 1,
+         modeRows: modeLines.length,
+         helpTop: promptLines.length + 1 + modeLines.length + 1,
+         barHits: bar?.hits ?? [],
+      };
       return this.frameBodyLines(bodyLines, width, innerWidth);
    }
 
@@ -1948,7 +1996,10 @@ class AskComponent extends Container {
       if (maxLines === 2) return [this.renderTopBorder(width), this.renderBottomBorder(width)];
 
       const bodyCapacity = Math.max(0, maxLines - 2);
-      let helpFullLines = this.helpText.render(innerWidth);
+      // The action bar (I4) takes the first help row only when two help rows fit.
+      const bar = bodyCapacity >= 12 ? this.renderActionBarLine(innerWidth) : undefined;
+      const helpRows = () => [...(bar ? [bar.line] : []), ...this.helpText.render(innerWidth)];
+      let helpFullLines = helpRows();
       const questionLines = this.buildQuestionLines(innerWidth);
       const fullContextLines = this.buildFullContextLines(innerWidth);
       const shouldCollapse = this.displayMode === "inline"
@@ -1962,7 +2013,7 @@ class AskComponent extends Container {
             )
             : this.contextIsCollapsible;
       this.setContextIsCollapsible(shouldCollapse);
-      helpFullLines = this.helpText.render(innerWidth);
+      helpFullLines = helpRows();
       const promptLines = this.buildPromptLines(innerWidth, fullContextLines);
       const helpBudget = this.getOverlayHelpBudget(bodyCapacity, helpFullLines.length);
       const contentRows = Math.max(0, bodyCapacity - helpBudget);
@@ -1980,7 +2031,7 @@ class AskComponent extends Container {
             const promptMinRows = promptLines.length > 0 ? 1 : 0;
             const maximumModeRows = Math.max(0, promptAndModeRows - promptMinRows);
             const modeMinRows = Math.min(this.getMinimumModeRows(), maximumModeRows);
-            modeBudget = Math.min(this.getPreferredModeRows(), maximumModeRows);
+            modeBudget = Math.min(this.getPreferredModeRows(innerWidth), maximumModeRows);
             modeBudget = Math.max(modeMinRows, modeBudget);
             promptBudget = promptAndModeRows - modeBudget;
 
@@ -1996,7 +2047,7 @@ class AskComponent extends Container {
             }
          }
       } else {
-         modeBudget = Math.min(this.getPreferredModeRows(), contentRows);
+         modeBudget = Math.min(this.getPreferredModeRows(innerWidth), contentRows);
          modeBudget = Math.max(Math.min(this.getMinimumModeRows(), contentRows), modeBudget);
          promptBudget = Math.max(0, contentRows - modeBudget);
          if (promptBudget > 0 && modeBudget > 0) {
@@ -2012,21 +2063,26 @@ class AskComponent extends Container {
 
       const promptPaneLines = this.renderPromptPane(promptLines, promptBudget, innerWidth);
       const helpLines = this.limitLines(helpFullLines, helpBudget, innerWidth, false);
-      const bodyLines = [
-         ...promptPaneLines,
-         ...(separatorRows > 0 && promptPaneLines.length > 0 && modeLines.length > 0 ? [""] : []),
-         ...modeLines,
-         ...helpLines,
-      ];
+      const separator = separatorRows > 0 && promptPaneLines.length > 0 && modeLines.length > 0 ? [""] : [];
+      const bodyLines = [...promptPaneLines, ...separator, ...modeLines, ...helpLines];
+      const modeTop = promptPaneLines.length + separator.length;
+      let helpTop = modeTop + modeLines.length;
 
-      if (this.displayMode === "fullscreen" || this.displayMode === "adaptive") {
-         const fitted = bodyLines.slice(0, bodyCapacity);
-         // Keep keyboard hints at the bottom when the list is short.
+      let fitted = bodyLines.slice(0, bodyCapacity);
+      if (this.displayMode === "fullscreen") {
+         // Fullscreen keeps the keyboard hints at the bottom when the list is short.
          const helpCount = Math.min(helpLines.length, fitted.length);
-         fitted.splice(fitted.length - helpCount, 0, ...Array(Math.max(0, bodyCapacity - fitted.length)).fill(""));
-         return this.frameBodyLines(fitted, width, innerWidth);
+         const padding = Math.max(0, bodyCapacity - fitted.length);
+         fitted.splice(fitted.length - helpCount, 0, ...Array(padding).fill(""));
+         helpTop += padding;
       }
-      return this.frameBodyLines(bodyLines.slice(0, bodyCapacity), width, innerWidth);
+      this.promptMouseLayout = {
+         modeTop,
+         modeRows: modeLines.length,
+         helpTop,
+         barHits: bar && helpLines.length > 0 && helpLines.length <= helpFullLines.length && helpBudget >= 2 ? bar.hits : [],
+      };
+      return this.frameBodyLines(fitted, width, innerWidth);
    }
 
    private buildQuestionLines(width: number): string[] {
@@ -2103,14 +2159,103 @@ class AskComponent extends Container {
       return 3;
    }
 
-   private getPreferredModeRows(): number {
-      if (this.displayMode === "fullscreen" || this.displayMode === "adaptive") {
+   private getPreferredModeRows(width: number): number {
+      if (this.displayMode === "fullscreen") {
          const rows = Number.isFinite(this.tui.terminal.rows) ? Math.max(1, Math.floor(this.tui.terminal.rows)) : 24;
          return rows; // The actual mode budget is clipped by the prompt/help constraints above.
       }
       if (this.mode === "freeform") return 10;
       if (this.mode === "comment") return 11;
+      if (this.displayMode === "adaptive") {
+         // Adaptive (Fix 8 "2C"): as tall as the tallest option needs, measured over
+         // every option so the box keeps its height while you move or filter.
+         const list = this.allowMultiple ? this.ensureMultiSelectList() : this.ensureSingleSelectList();
+         return Math.max(this.getMinimumModeRows(), list.preferredRows(width));
+      }
       return 8;
+   }
+
+   /** Buttons for the current mode (I4); undefined when there's nothing worth a button row. */
+   private renderActionBarLine(width: number): { line: string; hits: HitRect[] } | undefined {
+      const buttons: ActionButton[] = [];
+      if (this.mode === "select") {
+         buttons.push({ id: "submit", label: this.allowMultiple ? "Submit" : "Select", key: "⏎", primary: true });
+         buttons.push({ id: "cancel", label: "Cancel", key: "esc" });
+      } else if (this.mode === "freeform" && this.usesCustomTextRow()) {
+         buttons.push({ id: "editor-submit", label: "Save", key: "⏎", primary: true });
+         buttons.push({ id: "editor-back", label: "Undo edit", key: "esc" });
+      } else {
+         buttons.push({ id: "editor-submit", label: "Submit", key: "⏎", primary: true });
+         buttons.push({ id: "editor-back", label: this.options.length === 0 ? "Cancel" : "Back", key: "esc" });
+      }
+      const fullscreen = this.shortcuts.fullscreenToggle;
+      if (this.displayMode !== "inline" && this.toggleFullscreen && !fullscreen.disabled) {
+         buttons.push({ id: "fullscreen", label: this.displayMode === "fullscreen" ? "Restore" : "Fullscreen", key: fullscreen.spec });
+      }
+      return renderActionBar(this.theme, buttons, width);
+   }
+
+   /** Called by the prompt runner with the function that resizes the overlay. */
+   public setFullscreenToggleHandler(toggle: () => void): void {
+      this.toggleFullscreen = toggle;
+      this.updateHelpText();
+   }
+
+   private pressButton(id: string): void {
+      if (id === "fullscreen") {
+         this.toggleFullscreen?.();
+         return;
+      }
+      if (id === "cancel") {
+         this.onDone(null);
+         return;
+      }
+      if (id === "submit") {
+         if (this.allowMultiple) this.ensureMultiSelectList().submit();
+         else this.ensureSingleSelectList().confirmSelected();
+         this.tui.requestRender();
+         return;
+      }
+      if (id === "editor-submit") {
+         this.handleEditorSubmit(this.ensureEditor().getText());
+         return;
+      }
+      if (id === "editor-back") {
+         if (this.options.length === 0) this.onDone(null);
+         else this.leaveEditor();
+      }
+   }
+
+   /**
+    * Mouse input in Pi's fullscreen TUI (I1–I4): the option area goes to the
+    * list (clicks, wheel, scrollbar drags), and the action bar's buttons act
+    * like their keys. Coordinates are relative to this component's frame.
+    */
+   // Typed loosely: Container's signature names pi-tui mouse types that older Pi
+   // versions don't export. Pi wraps a plain { handled } result with the target itself.
+   override handleMouse(event: any): any {
+      return this.routeMouse(event as AskMouseEvent);
+   }
+
+   private routeMouse(event: AskMouseEvent): AskMouseResult | undefined {
+      const layout = this.promptMouseLayout;
+      if (!layout) return undefined;
+      const x = event.x - BOX_BORDER_LEFT.length;
+      const y = event.y - 1;
+      const list = this.activeList();
+      if (list && (list.drag || (y >= layout.modeTop && y < layout.modeTop + layout.modeRows))) {
+         const result = list.handleMouse({ ...event, x, y: y - layout.modeTop });
+         if (result) {
+            this.tui.requestRender();
+            return { handled: true, ...result };
+         }
+      }
+      const button = hitAt(layout.barHits, x, y - layout.helpTop);
+      if (button?.target.kind === "button") {
+         if (event.type === "click") this.pressButton(button.target.id);
+         if (event.type === "click" || event.type === "press") return { handled: true };
+      }
+      return undefined;
    }
 
    private renderModeLines(width: number, budget: number): string[] {
@@ -2142,6 +2287,17 @@ class AskComponent extends Container {
       ];
    }
 
+   /** The editor's heading: "Custom response", or for multi-select the saved-text heading and what is ticked. */
+   private customTextHeader(): string[] {
+      const theme = this.theme;
+      if (!this.usesCustomTextRow()) return [theme.fg("accent", theme.bold("Custom response"))];
+      const ticked = this.ensureMultiSelectList().selectedOptionIndices(true).map((index) => this.options[index]!.title);
+      return [
+         `${theme.fg("accent", theme.bold("Your own text"))}${theme.fg("dim", "   enter save · esc undo this edit")}`,
+         `${theme.fg("muted", "Ticked so far: ")}${ticked.length ? theme.fg("text", ticked.join(", ")) : theme.fg("dim", "nothing yet")}`,
+      ];
+   }
+
    private buildEditorModeHeaderLines(width: number): string[] {
       if (this.mode === "comment") {
          const selectedLabel = this.pendingSelections.length === 1 ? "Selected option:" : "Selected options:";
@@ -2153,7 +2309,7 @@ class AskComponent extends Container {
       }
 
       return [
-         ...new Text(this.theme.fg("accent", this.theme.bold("Custom response")), 1, 0).render(width),
+         ...this.customTextHeader().flatMap((line) => new Text(line, 1, 0).render(width)),
          "",
       ];
    }
@@ -2317,9 +2473,17 @@ class AskComponent extends Container {
       const overlayHint = this.displayMode !== "inline" && !this.shortcuts.overlayToggle.disabled
          ? literalHint(theme, this.shortcuts.overlayToggle.spec, "hide")
          : null;
-      const promptScrollHint = this.displayMode !== "inline" || this.contextExpanded
-         ? literalHint(theme, "PgUp/PgDn", "prompt")
+      const fullscreen = this.shortcuts.fullscreenToggle;
+      const fullscreenHint = this.displayMode !== "inline" && !fullscreen.disabled && this.toggleFullscreen
+         ? literalHint(theme, fullscreen.spec, this.displayMode === "fullscreen" ? "restore" : "fullscreen")
          : null;
+      // PgUp/PgDn scroll the highlighted option's description only while it overflows (Fix 2).
+      const previewScrolls = this.mode === "select" && this.previewOverflows();
+      const promptScrollHint = previewScrolls
+         ? [literalHint(theme, "PgUp/PgDn", "preview"), literalHint(theme, "alt+↑↓", "line")].join(" • ")
+         : this.displayMode !== "inline" || this.contextExpanded
+            ? literalHint(theme, "PgUp/PgDn", "prompt")
+            : null;
       const commentHint = this.allowComment && !this.shortcuts.commentToggle.disabled
          ? literalHint(theme, this.shortcuts.commentToggle.spec, "toggle context")
          : null;
@@ -2334,12 +2498,14 @@ class AskComponent extends Container {
          const alternateCancelKeys = this.keybindings
             .getKeys("tui.select.cancel")
             .filter((key) => key !== "escape" && key !== "esc");
+         const savesText = this.mode === "freeform" && this.usesCustomTextRow();
          const hints = [
             this.navigationHint,
-            keybindingHint(theme, this.keybindings, "tui.input.submit", this.mode === "comment" ? "submit/skip" : "submit"),
+            keybindingHint(theme, this.keybindings, "tui.input.submit", this.mode === "comment" ? "submit/skip" : savesText ? "save" : "submit"),
             keybindingHint(theme, this.keybindings, "tui.input.newLine", "newline"),
-            literalHint(theme, "esc", this.options.length === 0 ? "cancel" : "back"),
+            literalHint(theme, "esc", this.options.length === 0 ? "cancel" : savesText ? "undo edit" : "back"),
             overlayHint,
+            fullscreenHint,
             alternateCancelKeys.length > 0 ? literalHint(theme, formatKeyList(alternateCancelKeys), "cancel") : null,
          ]
             .filter((hint): hint is string => !!hint)
@@ -2356,7 +2522,9 @@ class AskComponent extends Container {
             commentHint,
             contextHint,
             promptScrollHint,
+            this.customText ? literalHint(theme, "⌫", "remove your text") : null,
             overlayHint,
+            fullscreenHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "submit"),
             keybindingHint(theme, this.keybindings, "tui.select.cancel", "cancel"),
          ]
@@ -2376,6 +2544,7 @@ class AskComponent extends Container {
             keybindingHint(theme, this.keybindings, "tui.editor.deleteCharBackward", "erase"),
             literalHint(theme, "↑↓", "navigate"),
             overlayHint,
+            fullscreenHint,
             keybindingHint(theme, this.keybindings, "tui.select.confirm", "select"),
             literalHint(theme, "esc", "clear/cancel"),
             alternateCancelKeys.length > 0
@@ -2421,10 +2590,12 @@ class AskComponent extends Container {
          const { line, col } = editor.getCursor();
          const cursor = editor.getLines().slice(0, line).reduce((sum, text) => sum + text.length + 1, 0) + col;
          const backToOptions = this.options.length > 0;
+         const savesText = this.mode === "freeform" && this.usesCustomTextRow();
+         const ticked = savesText ? this.ensureMultiSelectList().selectedOptionIndices(true).map((index) => this.options[index]!.title) : [];
          native.onEvent((event) => {
             if (onTab(event) || event.ev !== "action") return;
             if (event.act === "cancel" || event.act === "close") {
-               if (backToOptions) this.showSelectMode();
+               if (backToOptions) this.leaveEditor();
                else this.onDone(null);
             } else if (event.act === "submit") {
                this.handleEditorSubmit(editor.getText());
@@ -2433,11 +2604,14 @@ class AskComponent extends Container {
          return textSheet({
             question: this.question,
             context: this.context,
-            lead: this.mode === "comment" ? `Selected: ${this.pendingSelections.join(", ")}` : undefined,
+            lead: this.mode === "comment"
+               ? `Selected: ${this.pendingSelections.join(", ")}`
+               : savesText ? `Your own text, sent with the ticked options. Ticked so far: ${ticked.length ? ticked.join(", ") : "nothing yet"}` : undefined,
             text: editor.getText(),
             cursor,
             placeholder: this.mode === "comment" ? "Add context for your selection" : "Type your answer",
             escape: backToOptions ? "back" : "cancel",
+            ...(savesText ? { submitLabel: "Save" } : {}),
             tabs: tabs?.tabs,
          });
       }
@@ -2504,8 +2678,14 @@ class AskComponent extends Container {
       );
       list.onCancel = () => this.onDone(null);
       list.preselect(this.preselectedIds);
+      list.setCustomText(this.customText);
       list.onSubmit = (result) => this.handleSelectionSubmit(result, list.isCommentEnabled(),
-         selectedIdsForIndices(this.options, list.selectedOptionIndices()));
+         result.length ? selectedIdsForIndices(this.options, list.selectedOptionIndices()) : undefined);
+      list.onClearCustom = () => {
+         this.customText = "";
+         list.setCustomText("");
+         this.tui.requestRender();
+      };
       list.onEnterFreeform = () => this.showFreeformMode();
 
       this.multiSelectList = list;
@@ -2545,8 +2725,9 @@ class AskComponent extends Container {
    }
 
    private handleSelectionSubmit(selections: string[], wantsComment: boolean, selectedIds?: number[]): void {
-      const custom = this.allowMultiple && this.allowFreeform ? this.freeformDraft.trim() : "";
-      if (this.allowComment && wantsComment) {
+      // Only text the user saved goes out; an abandoned editor draft never does (Fix 1).
+      const custom = this.usesCustomTextRow() ? this.customText : "";
+      if (this.allowComment && wantsComment && selections.length > 0) {
          this.pendingSelections = selections;
          this.pendingSelectedIds = selectedIds;
          this.pendingCombinedText = custom;
@@ -2561,22 +2742,17 @@ class AskComponent extends Container {
    private handleEditorSubmit(text: string): void {
       if (this.mode === "freeform") {
          this.freeformDraft = text;
-         if (this.allowMultiple && this.allowFreeform && this.options.length) {
-            const indices = this.ensureMultiSelectList().selectedOptionIndices(true);
-            const selections = indices.map((index) => this.options[index]!.title);
-            const ids = selectedIdsForIndices(this.options, indices);
-            if (this.allowComment && this.ensureMultiSelectList().isCommentEnabled() && selections.length) {
-               this.pendingSelections = selections;
-               this.pendingSelectedIds = ids;
-               this.pendingCombinedText = text;
-               this.commentDraft = "";
-               this.showCommentMode();
-               return;
-            }
-            this.onDone(createCombinedResponse(selections, text, ids));
-         } else {
-            this.onDone(createFreeformResponse(text));
+         if (this.usesCustomTextRow()) {
+            // Multi-select: Enter saves the text and returns to the list, where it
+            // shows ticked on its row; Submit then sends it with the ticked options.
+            this.customText = text.trim();
+            const list = this.ensureMultiSelectList();
+            list.setCustomText(this.customText);
+            this.showSelectMode();
+            list.focusCustomRow();
+            return;
          }
+         this.onDone(createFreeformResponse(text));
          return;
       }
 
@@ -2608,6 +2784,13 @@ class AskComponent extends Container {
       this.tui.requestRender();
    }
 
+   /** Esc in the editor: back to the options. For multi-select custom text this undoes the edit (Fix 1). */
+   private leaveEditor(): void {
+      const wasCustomText = this.mode === "freeform" && this.usesCustomTextRow();
+      this.showSelectMode();
+      if (wasCustomText) this.ensureMultiSelectList().focusCustomRow();
+   }
+
    private showFreeformMode(): void {
       if (this.mode === "comment") {
          this.saveEditorDraft();
@@ -2617,10 +2800,11 @@ class AskComponent extends Container {
       this.modeContainer.clear();
 
       const editor = this.ensureEditor();
-      this.setEditorText(this.freeformDraft);
+      // Multi-select edits the saved text; anything typed and then dropped with Esc is gone.
+      this.setEditorText(this.usesCustomTextRow() ? this.customText : this.freeformDraft);
       (editor as any).focused = this._focused;
 
-      this.modeContainer.addChild(new Text(this.theme.fg("accent", this.theme.bold("Custom response")), 1, 0));
+      for (const line of this.customTextHeader()) this.modeContainer.addChild(new Text(line, 1, 0));
       this.modeContainer.addChild(new Spacer(1));
       this.modeContainer.addChild(editor);
 
@@ -2709,7 +2893,8 @@ class AskComponent extends Container {
       if (matchesKey(data, this.getContextToggleKey() as any) && this.toggleContext()) {
          return;
       }
-      // Multi-select preview uses PageUp/PageDown; prompt still uses Ctrl+U/D.
+      // While the highlighted option's description overflows, PgUp/PgDn and
+      // Alt+↑/↓ scroll it; otherwise they fall through to the prompt (Fix 2).
       if (this.mode === "select" && (this.allowMultiple
          ? this.multiSelectList?.handlePreviewKeys(data)
          : this.singleSelectList?.handlePreviewKeys(data))) {
@@ -2727,7 +2912,7 @@ class AskComponent extends Container {
                this.onDone(null);
                return;
             }
-            this.showSelectMode();
+            this.leaveEditor();
             return;
          }
 
@@ -2786,6 +2971,9 @@ class BatchAskComponent implements Component {
    private reviewScrollOffset = 0;
    private reviewMaxScrollOffset = 0;
    private _focused = false;
+   private toggleFullscreen?: () => void;
+   /** The review page's action bar position, for mouse clicks (I4). */
+   private reviewBar?: { row: number; hits: HitRect[] };
 
    constructor(
       private questions: BatchQuestion[],
@@ -2830,6 +3018,28 @@ class BatchAskComponent implements Component {
       this.settings.displayMode = mode;
       for (const page of this.pages) page.setDisplayMode(mode);
       this.tui.requestRender();
+   }
+
+   public setFullscreenToggleHandler(toggle: () => void): void {
+      this.toggleFullscreen = toggle;
+      for (const page of this.pages) page.setFullscreenToggleHandler(toggle);
+   }
+
+   /** Mouse events go to the current question page, or to the review page's buttons. */
+   handleMouse(event: AskMouseEvent): AskMouseResult | undefined {
+      const page = this.pages[this.current];
+      if (page) return page.handleMouse(event);
+      const bar = this.reviewBar;
+      if (!bar) return undefined;
+      const button = hitAt(bar.hits, event.x - BOX_BORDER_LEFT.length, event.y - 1 - bar.row);
+      if (button?.target.kind !== "button") return undefined;
+      if (event.type === "click") {
+         if (button.target.id === "submit") this.submitReview();
+         else if (button.target.id === "cancel") this.onDone(null);
+         else if (button.target.id === "fullscreen") this.toggleFullscreen?.();
+         this.tui.requestRender();
+      }
+      return { handled: true };
    }
 
    invalidate(): void {
@@ -3021,12 +3231,21 @@ class BatchAskComponent implements Component {
          : undefined;
       const hintText = theme.fg("dim", hints);
       const bodyCapacity = Math.max(1, this.reviewLineCap() - 2);
-      let footerLines = ["", ...(warningText ? wrapFooter(warningText) : []), ...wrapFooter(hintText)];
+      const fullscreen = this.settings.shortcuts.fullscreenToggle;
+      const bar = renderActionBar(theme, [
+         { id: "submit", label: unanswered > 0 && this.confirmingSkips ? "Submit with skips" : "Submit", key: "⏎", primary: true },
+         { id: "cancel", label: "Cancel", key: "esc" },
+         ...(this.settings.displayMode !== "inline" && this.toggleFullscreen && !fullscreen.disabled
+            ? [{ id: "fullscreen", label: this.settings.displayMode === "fullscreen" ? "Restore" : "Fullscreen", key: fullscreen.spec }]
+            : []),
+      ], innerWidth);
+      let footerLines = ["", ...(warningText ? wrapFooter(warningText) : []), bar.line, ...wrapFooter(hintText)];
       // On very short prompts keep room for answers: drop the spacer and keep
       // the warning and hints to one line each (frameBox truncates them).
       if (bodyCapacity - footerLines.length < REVIEW_MIN_CONTENT_ROWS) {
          footerLines = [...(warningText ? [warningText] : []), hintText];
       }
+      const barRow = footerLines.indexOf(bar.line);
 
       // The answers scroll inside the cap while the footer stays visible.
       const contentBudget = Math.max(1, bodyCapacity - footerLines.length);
@@ -3046,11 +3265,13 @@ class BatchAskComponent implements Component {
          if (hiddenBelow) visibleContent[last] = marker("↓", visibleContent[last]!);
       }
       const reviewBody = [...visibleContent, ...footerLines];
-       if (this.settings.displayMode === "fullscreen" || this.settings.displayMode === "adaptive") {
-          const spacer = Math.max(0, bodyCapacity - reviewBody.length);
-          reviewBody.splice(visibleContent.length, 0, ...Array(spacer).fill(""));
-       }
-       return frameBox(theme, this.title, reviewBody, width);
+      let spacer = 0;
+      if (this.settings.displayMode === "fullscreen") {
+         spacer = Math.max(0, bodyCapacity - reviewBody.length);
+         reviewBody.splice(visibleContent.length, 0, ...Array(spacer).fill(""));
+      }
+      this.reviewBar = barRow >= 0 ? { row: visibleContent.length + spacer + barRow, hits: bar.hits } : undefined;
+      return frameBox(theme, this.title, reviewBody, width);
    }
 
    /** Rows the review page may use, borders included. */
@@ -3422,6 +3643,9 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
 
          activeTui = tui;
          activeComponent = request.createComponent(tui, theme, keybindings, complete);
+         // The Fullscreen button (I4) runs the same switch as the key.
+         const withToggle = activeComponent as Component & { setFullscreenToggleHandler?: (toggle: () => void) => void };
+         if (displayMode !== "inline" && !fullscreenToggle.disabled) withToggle.setFullscreenToggleHandler?.(switchFullscreen);
          return activeComponent;
       };
 
@@ -3429,6 +3653,14 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
       // work even while the overlay is hidden (hidden overlays do not receive
       // input): the hide/show key and the fullscreen key. Inline mode needs
       // neither, because it has no overlay to hide or resize.
+      function switchFullscreen(): void {
+         if (!activeTui || !overlayOptions?.overlayOptions) return;
+         currentDisplayMode = currentDisplayMode === "fullscreen" ? initialDisplayMode : "fullscreen";
+         resizeOverlay(currentDisplayMode);
+         const component = activeComponent as (Component & { setDisplayMode?: (mode: AskDisplayMode) => void }) | undefined;
+         component?.setDisplayMode?.(currentDisplayMode);
+         activeTui.requestRender();
+      }
       const resizeOverlay = (mode: AskDisplayMode) => {
          const bounds = overlayOptions?.overlayOptions;
          if (!bounds) return;
@@ -3463,11 +3695,7 @@ async function runCustomPrompt<T>(ui: ExtensionUIContext, request: CustomPromptR
                return { consume: true };
             }
             if (overlayHandle?.isHidden()) return { consume: true };
-            currentDisplayMode = currentDisplayMode === "fullscreen" ? initialDisplayMode : "fullscreen";
-            resizeOverlay(currentDisplayMode);
-            const component = activeComponent as (Component & { setDisplayMode?: (mode: AskDisplayMode) => void }) | undefined;
-            component?.setDisplayMode?.(currentDisplayMode);
-            activeTui!.requestRender();
+            switchFullscreen();
             return { consume: true };
          });
       }

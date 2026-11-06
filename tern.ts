@@ -198,6 +198,8 @@ export interface TextSheet {
    readonly placeholder: string;
    /** What esc does: back to the options, or cancel when there are none. */
    readonly escape: "back" | "cancel";
+   /** The submit button's label; multi-select custom text says "Save" because Enter keeps it and returns to the list. */
+   readonly submitLabel?: string;
    readonly tabs?: QuestionTabs;
 }
 
@@ -207,7 +209,7 @@ export function textSheet(sheet: TextSheet): TernNode {
       ...questionNodes(sheet.question, sheet.context),
       sheet.lead ? notice([{ t: sheet.lead }], "lead") : null,
       n("editor", { text: sheet.text, cursor: sheet.cursor, maxLines: 8, placeholder: sheet.placeholder }, [], "field"),
-      actionBar([button(sheet.escape === "back" ? "Back" : "Cancel", "cancel", "esc"), button("Submit", "submit", "enter", "accent")]),
+      actionBar([button(sheet.escape === "back" ? "Back" : "Cancel", "cancel", "esc"), button(sheet.submitLabel ?? "Submit", "submit", "enter", "accent")]),
    ]);
 }
 
@@ -253,24 +255,28 @@ export interface AskCardDetails {
    readonly answers?: readonly ({ status: "answered"; response: AskCardResponse } | { status: "skipped" })[];
 }
 
-type AskCardResponse = { kind: "selection"; selections: readonly string[]; comment?: string } | { kind: "freeform"; text: string };
+type AskCardResponse =
+   | { kind: "selection"; selections: readonly string[]; comment?: string }
+   | { kind: "combined"; selections: readonly string[]; text: string; comment?: string }
+   | { kind: "freeform"; text: string };
 
 function firstLine(text: string): string {
    return text.split("\n").find((line) => line.trim() !== "")?.trim() ?? "";
 }
 
-/** One answered question: every option, a check on the chosen ones, then a custom answer or comment. */
+/** One answered question: every option, a check on the chosen ones, then the custom text and comment. */
 function answerRows(options: readonly { title: string }[], response: AskCardResponse | null | undefined, keyPrefix: string): TernNode[] {
    if (!response) return [n("text", { text: "Cancelled", tone: "warning" }, [], `${keyPrefix}cancelled`)];
-   const chosen = new Set(response.kind === "selection" ? response.selections : []);
+   const chosen = new Set(response.kind === "freeform" ? [] : response.selections);
    const row = (label: string, on: boolean, key: string): TernNode =>
       n("row", { gap: "sm", align: "baseline", role: on ? "omp.tool.answer" : "omp.tool.answer.off" }, [
          on ? n("icon", { name: "check", tone: "success" }) : null,
          n("text", { spans: [{ t: label, s: on ? "strong" : "muted" }], wrap: "word" }),
       ], key);
    const rows = options.map((option, index) => row(option.title, chosen.has(option.title), `${keyPrefix}o${index}`));
-   if (response.kind === "freeform") rows.push(row(`“${response.text}”`, true, `${keyPrefix}custom`));
-   if (response.kind === "selection" && response.comment) {
+   // A freeform answer, or the text sent alongside ticked options (a "combined" answer).
+   if (response.kind !== "selection") rows.push(row(`“${response.text}”`, true, `${keyPrefix}custom`));
+   if (response.kind !== "freeform" && response.comment) {
       rows.push(n("text", { spans: [{ t: response.comment, s: "muted" }], wrap: "word", role: "omp.tool.context" }, [], `${keyPrefix}comment`));
    }
    return rows;
