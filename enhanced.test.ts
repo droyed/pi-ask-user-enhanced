@@ -836,6 +836,6 @@ describe("Fix 10: version", () => {
    test("the frame shows the enhanced version", async () => {
       let shown = "";
       await run({ question: "Pick", options: ["A"] }, (s) => (shown = s.text()));
-      expect(shown).toContain("v0.17.2-enhanced.1.4.0");
+      expect(shown).toContain("v0.17.2-enhanced.1.4.1");
    });
 });

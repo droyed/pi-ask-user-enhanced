@@ -1,14 +1,20 @@
-# pi-ask-user
+# pi-ask-user-enhanced
 
-> **Enhanced build.** This is pi-ask-user 0.17.2 with extra features and fixes, version `0.17.2-enhanced.1.4.0`. See [ENHANCED.md](ENHANCED.md) for what's different and how to install it. Install it from a local folder, and don't reinstall `npm:pi-ask-user`: that would replace it with upstream.
+> **Unofficial fork.** This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) by Enzo Lucchesi (MIT), version 0.17.2, with extra features and fixes. It is not affiliated with or endorsed by the original author. Version `0.17.2-enhanced.1.4.1`.
+>
+> - **What's different:** see [ENHANCED.md](ENHANCED.md). Everything below is upstream's documentation and still applies.
+> - **Install:** `pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1`. Remove `npm:pi-ask-user` first: both register `ask_user`.
+> - **Problems with this build:** please report them [here](https://github.com/droyed/pi-ask-user-enhanced/issues), not on the upstream tracker.
 
 A Pi package that adds an interactive `ask_user` tool for collecting user decisions during an agent run.
 
 ## Demo
 
-![ask_user demo](https://raw.githubusercontent.com/edlsh/pi-ask-user/main/media/ask-user-demo.gif)
+This is upstream's demo of pi-ask-user, which this build extends; it doesn't show the enhanced features.
 
-High-quality video: [ask-user-demo.mp4](https://github.com/edlsh/pi-ask-user/blob/main/media/ask-user-demo.mp4)
+![ask_user demo (upstream)](media/ask-user-demo.gif)
+
+High-quality video: [ask-user-demo.mp4](media/ask-user-demo.mp4)
 
 ## Features
 
@@ -50,8 +56,10 @@ See: `skills/ask-user/references/ask-user-skill-extension-spec.md`.
 
 ## Install
 
+This fork is installed from git, not npm (`npm:pi-ask-user` is upstream). See [ENHANCED.md](ENHANCED.md#install).
+
 ```bash
-pi install npm:pi-ask-user
+pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1
 ```
 
 ## Tool name
@@ -309,8 +317,8 @@ Malformed options, invalid `questions` batches, unavailable interactive UI, and 
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/edlsh/pi-ask-user/blob/main/CONTRIBUTING.md) for development setup and checks.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and checks.
 
 ## Changelog
 
-See [CHANGELOG.md](https://github.com/edlsh/pi-ask-user/blob/main/CHANGELOG.md).
+This build's changes are listed in [ENHANCED.md](ENHANCED.md#changelog). Upstream's history up to 0.17.2 is in [CHANGELOG.md](CHANGELOG.md).

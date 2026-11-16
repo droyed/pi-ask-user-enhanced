@@ -1,7 +1,7 @@
 {
-  "name": "pi-ask-user",
-  "version": "0.17.2-enhanced.1.4.0",
-  "description": "Interactive ask_user tool for pi-coding-agent with searchable split-pane selection UI, multi-select, and freeform input",
+  "name": "pi-ask-user-enhanced",
+  "version": "0.17.2-enhanced.1.4.1",
+  "description": "Unofficial enhanced fork of pi-ask-user: the interactive ask_user tool for Pi, with a scrollable preview, fullscreen and adaptive sizing, mouse support and checkbox-style custom text",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -13,15 +13,18 @@
     "interactive"
   ],
   "author": "Enzo Lucchesi <enzo@edl.sh>",
+  "contributors": [
+    "droyed (https://github.com/droyed)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/edlsh/pi-ask-user.git"
+    "url": "git+https://github.com/droyed/pi-ask-user-enhanced.git"
   },
   "bugs": {
-    "url": "https://github.com/edlsh/pi-ask-user/issues"
+    "url": "https://github.com/droyed/pi-ask-user-enhanced/issues"
   },
-  "homepage": "https://github.com/edlsh/pi-ask-user#readme",
+  "homepage": "https://github.com/droyed/pi-ask-user-enhanced#readme",
   "publishConfig": {
     "access": "public"
   },

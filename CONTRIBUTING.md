@@ -1,70 +1,50 @@
 # Contributing
 
+pi-ask-user-enhanced is an unofficial fork of [pi-ask-user](https://github.com/edlsh/pi-ask-user) by Enzo Lucchesi. It is maintained on a best-effort basis.
+
+## Issues and pull requests
+
+Issues and small pull requests are welcome here. Please open an issue first for anything larger than a fix, so we can agree on the behavior before you write code.
+
+If a bug also happens with upstream `npm:pi-ask-user`, it may be better reported [upstream](https://github.com/edlsh/pi-ask-user/issues). Upstream accepts issues, not outside pull requests.
+
+When reporting a bug, include the pi-ask-user-enhanced version (shown at the bottom of the prompt), the Pi version, your terminal, the display mode, any `PI_ASK_USER_*` variables or `ask-user.json` settings, the tool arguments, and steps to reproduce. Remove private question or answer content first.
+
 ## Development setup
 
-Use Node.js 22.19.0 or newer and Bun 1.3.14. Bun runs the unit tests and manages
-pinned development dependencies. The extension itself runs in Pi; these are
-contributor requirements, not a change to its supported host versions.
+Use Node.js 22.19.0 or newer and Bun 1.3.14 or newer. Bun runs the tests and manages the pinned development dependencies.
 
 ```bash
 bun install --frozen-lockfile --ignore-scripts
 bun run check
 ```
 
-Dependency lifecycle scripts are not needed for these checks. Commit `bun.lock`
-when intentionally updating development dependencies.
+`bun run check` runs:
 
-## Verification
-
-- `bun run test`: fast unit tests (host/UI modules are mocked).
+- `bun run test`: unit tests (host and UI modules are mocked).
 - `bun run typecheck`: strict TypeScript checks for source and tests.
-- `bun run check:host`: load the extension through the real installed Pi host and
-  verify its schema, dialog fallback, and event contract without a model request.
-- `bun run check:docs`: validate all documented JSON examples against the schema
-  registered by the real host.
-- `bun run check:package`: verify the npm package contains exactly its intended
-  runtime and documentation files.
+- `bun run check:host`: loads the extension through the real installed Pi host and checks its schema, dialog fallback and event contract, without a model request.
+- `bun run check:docs`: validates the JSON examples in the docs against the schema the real host registers.
+- `bun run check:package`: checks the package contains exactly its intended files.
 
-`bun run check` runs all of these. CI checks Node.js 22 and 24 with Pi 0.74.0
-(the supported minimum) and the pinned current host, 0.87.0. Runtime peer ranges
-remain unchanged. Updating the current development host also requires updating
-the CI matrix and checking the minimum host.
+CI runs these on Node.js 22 and 24 with Pi 0.74.0 (the supported minimum), 1.0.2 and 1.5.0.
 
-For UI changes, also check a real terminal: overlay and inline mode, narrow and
-wide terminals, resize, long context, comments/freeform, timeout and abort, and
-non-ASCII text. Automated smoke checks do not replace interactive verification.
+## Pull request guidelines
 
-## Pull requests
+- Keep changes small, and explain the behavior and how you tested it.
+- Include a regression test for a bug fix. New behavior goes in `enhanced.test.ts`; change an upstream test only when the behavior intentionally differs, and say why.
+- Keep enhanced code in `enhanced-ui.ts` where possible. The less `index.ts` differs from upstream, the easier upstream releases are to merge.
+- For UI changes, also check a real terminal: overlay and inline mode, narrow and wide terminals, resizing, long context, custom text and comments, timeout and abort, and non-ASCII text.
+- Don't change event payload redaction.
 
-This project does not accept outside pull requests. Please open an issue for
-bugs or feature requests instead; changes are made by the maintainer.
+## Releases and upstream
 
-Keep changes small and explain their behavior and tests. Include a regression
-test for a bug fix. For cancellation, verify that the dialog closes, owned
-listeners/timers are released, and no successful answer is emitted afterward.
-For event changes, preserve default payload redaction. Do not combine new API
-features with maintenance fixes.
+Releases are tagged `enhanced-vX.Y.Z`; the version in `package.json` is `<upstream>-enhanced.X.Y.Z`. Each release updates `package.json`, the version in `README.md` and `ENHANCED.md`, the version test in `enhanced.test.ts`, the hashes in `.pi-ask-user-enhanced-v1.json`, and the changelog in `ENHANCED.md`.
 
-When reporting a bug, include Pi and package versions, terminal, display mode,
-relevant environment preferences, the tool arguments, and reproduction steps.
-Remove private question/answer content before sharing logs.
+The history continues from upstream's own commits, so a new upstream release merges directly:
 
-## Releases
-
-Releases are cut by release-please from Conventional Commit messages: `fix:`
-bumps the patch version, `feat:` the minor version (also for breaking changes
-while below 1.0), and other types do not release. It keeps a release PR open
-with the version bump and the generated `CHANGELOG.md` entry; merging that PR
-tags `vX.Y.Z`, creates the GitHub release, and dispatches `publish.yml` on the
-tag.
-
-Publishing runs the same checks before calling npm. `publish.yml` authenticates
-through npm trusted publishing (OIDC); there is no npm token secret, and the
-trusted publisher on npmjs.com must keep naming `edlsh/pi-ask-user` and
-`publish.yml`. The release tag must match `package.json`. Verify the published
-package version, contents, installation, and provenance after a successful run. An
-already-published version being skipped is not proof that publishing works.
-
-Do not overwrite published versions or move historical release tags. Changes to
-registry authentication, prerelease channels, or release policy need separate
-review; they are not covered by local package checks.
+```bash
+git remote add upstream https://github.com/edlsh/pi-ask-user.git
+git fetch upstream --tags
+git merge v0.18.0   # the upstream release tag
+```

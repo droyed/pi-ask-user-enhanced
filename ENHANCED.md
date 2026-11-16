@@ -1,26 +1,30 @@
-# pi-ask-user, enhanced build
+# pi-ask-user-enhanced
 
-This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) 0.17.2 by Enzo Lucchesi (MIT license), with extra features and fixes.
+This is an unofficial fork of [pi-ask-user](https://github.com/edlsh/pi-ask-user) 0.17.2 by Enzo Lucchesi (MIT license), with extra features and fixes. It is maintained by [droyed](https://github.com/droyed) and is not affiliated with or endorsed by the original author. Please report problems with it [in this repository](https://github.com/droyed/pi-ask-user-enhanced/issues).
 
 | | |
 |---|---|
-| Version | `0.17.2-enhanced.1.4.0` (shown at the bottom of every prompt) |
+| Version | `0.17.2-enhanced.1.4.1` (shown at the bottom of every prompt) |
 | Upstream base | pi-ask-user 0.17.2 |
-| Tested with | Pi 0.74.2, 1.0.2 and 1.5.0 |
+| Tested with | Pi 0.74.2, 0.87.0, 1.0.2 and 1.5.0 |
 
 Everything upstream documents in [README.md](README.md) still applies. This file covers what is different. The tool is still called `ask_user`, and it reads the same `ask-user.json` file and `PI_ASK_USER_*` environment variables, so it is a drop-in replacement.
 
 ## Install
 
-Install it from a local folder (or your own git repository). Don't install `npm:pi-ask-user` alongside it: both register `ask_user`, and Pi reports a load error. Don't reinstall it from npm either, since that would replace it with upstream.
+Install it from GitHub. Remove upstream first if you have it: both register `ask_user`, and Pi reports a load error when both are installed.
 
 ```fish
-# Remove the npm copy if you have one
+# Remove upstream's npm copy if you have one
 pi remove npm:pi-ask-user
 
-# Install this folder (Pi loads local packages in place, and `pi update --extensions` leaves them alone)
-pi install ~/pi-extensions/pi-ask-user
+# Install a release (pinned: `pi update` leaves it alone)
+pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1
 ```
+
+To move to a newer release later, remove the pinned one (`pi remove git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1`) and install the new tag. Installing without `@…` follows the `main` branch and updates with `pi update`. Releases are listed on the repository's [tags page](https://github.com/droyed/pi-ask-user-enhanced/tags).
+
+To work on it, clone the repository and install the folder: `pi install ~/path/to/pi-ask-user-enhanced`. Pi loads local folders in place.
 
 ## What's different
 
@@ -161,11 +165,18 @@ type AskResponse =
 
 ## Compatibility
 
-- Pi 0.74.2, 1.0.2 and 1.5.0: typecheck, all 222 tests (upstream's 181 plus 41 for this build), upstream's host smoke test through Pi's real extension loader, and the README and skill examples against Pi's validator.
+- Pi 0.74.2, 0.87.0, 1.0.2 and 1.5.0: typecheck, all 240 tests (upstream's 181 plus 59 for this build), upstream's host smoke test through Pi's real extension loader, and the README and skill examples against Pi's validator.
 - Option ids are declared as whole numbers (`multipleOf: 1`) rather than with `Type.Integer`, so hosts with limited TypeBox shims still register the tool.
 - Mouse support works in Pi 1.0.2 and 1.5.0. Pi 0.74 has no mouse input for extensions, so there everything works from the keyboard.
 
 ## Changelog
+
+### enhanced 1.4.1 (on upstream 0.17.2)
+
+- Published as `pi-ask-user-enhanced` on GitHub, installed with `pi install git:…`. The extension behaves exactly as in 1.4.0.
+- The history now continues from upstream's own `v0.17.2` commit, so upstream releases merge directly.
+- README and ENHANCED.md state that this is an unofficial fork and where to report problems. Upstream's release and publishing workflows were removed, and CI also runs on Pi 1.5.0.
+- Compatibility note corrected to 240 tests.
 
 ### enhanced 1.4.0 (on upstream 0.17.2)
 

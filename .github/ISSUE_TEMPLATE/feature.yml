@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a change. The codebase is kept small, so requests need a concrete use case.
+description: Suggest a change to the enhanced fork. Requests need a concrete use case.
 labels: [enhancement]
 body:
   - type: textarea
