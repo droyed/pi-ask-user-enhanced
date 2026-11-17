@@ -1,9 +1,10 @@
 # pi-ask-user-enhanced
 
-> **Unofficial fork.** This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) by Enzo Lucchesi (MIT), version 0.17.2, with extra features and fixes. It is not affiliated with or endorsed by the original author. Version `0.17.2-enhanced.1.4.1`.
+> **Unofficial fork.** This is [pi-ask-user](https://github.com/edlsh/pi-ask-user) by Enzo Lucchesi (MIT), version 0.17.2, with extra features and fixes. It is not affiliated with or endorsed by the original author. Version `0.17.2-enhanced.1.4.2`.
 >
-> - **What's different:** see [ENHANCED.md](ENHANCED.md). Everything below is upstream's documentation and still applies.
-> - **Install:** `pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1`. Remove `npm:pi-ask-user` first: both register `ask_user`.
+> - **What's new, at a glance:** [FEATURES.md](https://github.com/droyed/pi-ask-user-enhanced/blob/enhanced-v1.4.2/FEATURES.md), with screenshots.
+> - **What's different, in full:** see [ENHANCED.md](ENHANCED.md). Everything below is upstream's documentation and still applies.
+> - **Install:** `pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.2`. Remove `npm:pi-ask-user` first: both register `ask_user`.
 > - **Problems with this build:** please report them [here](https://github.com/droyed/pi-ask-user-enhanced/issues), not on the upstream tracker.
 
 A Pi package that adds an interactive `ask_user` tool for collecting user decisions during an agent run.
@@ -59,7 +60,7 @@ See: `skills/ask-user/references/ask-user-skill-extension-spec.md`.
 This fork is installed from git, not npm (`npm:pi-ask-user` is upstream). See [ENHANCED.md](ENHANCED.md#install).
 
 ```bash
-pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1
+pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.2
 ```
 
 ## Tool name

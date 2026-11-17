@@ -1,6 +1,6 @@
 {
   "name": "pi-ask-user-enhanced",
-  "version": "0.17.2-enhanced.1.4.1",
+  "version": "0.17.2-enhanced.1.4.2",
   "description": "Unofficial enhanced fork of pi-ask-user: the interactive ask_user tool for Pi, with a scrollable preview, fullscreen and adaptive sizing, mouse support and checkbox-style custom text",
   "type": "module",
   "keywords": [

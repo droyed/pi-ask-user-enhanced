@@ -27,7 +27,7 @@ bun run check
 - `bun run check:docs`: validates the JSON examples in the docs against the schema the real host registers.
 - `bun run check:package`: checks the package contains exactly its intended files.
 
-CI runs these on Node.js 22 and 24 with Pi 0.74.0 (the supported minimum), 1.0.2 and 1.5.0.
+CI runs these on Node.js 22 and 24 with Pi 0.74.0 (the supported minimum), 1.0.2, 1.5.0 and 1.5.2.
 
 ## Pull request guidelines
 

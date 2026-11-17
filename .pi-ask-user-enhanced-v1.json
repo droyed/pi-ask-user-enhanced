@@ -1,6 +1,6 @@
 {
-  "release": "enhanced-v1.4.1",
-  "version": "0.17.2-enhanced.1.4.1",
+  "release": "enhanced-v1.4.2",
+  "version": "0.17.2-enhanced.1.4.2",
   "upstream": "0.17.2",
   "upstreamSource": "npm:pi-ask-user@0.17.2",
   "repository": "https://github.com/droyed/pi-ask-user-enhanced",
@@ -20,7 +20,7 @@
   "hashes": {
     "index.ts": {
       "before": "91c97512f8a753fada5179b703168ecf95b1b1a7a2842f8f431b539317d0da66",
-      "after": "b9944bea95497543a46bd8fc31c9a224450f03c7676f7b81109a6f94eed91146"
+      "after": "76b41aefebd46d3cada1888e084f85a3f5c705354677132d971f68a2ac18e450"
     },
     "settings.ts": {
       "before": "e01560fa759d8bdc4296c1edcbc63f935c358d8e8e454ec6fee49d5341e787e7",
@@ -40,15 +40,15 @@
     },
     "ENHANCED.md": {
       "before": null,
-      "after": "1c6336a4c6cd16742c58d68b5024afa77b6752e2b1808c9ef20d1e29be3db33b"
+      "after": "fdee9bb18934ad013100cc879157073627e92976b0b1faecd935d23e8ce3f805"
     },
     "README.md": {
       "before": "e5f80d73a4000a56b076fb29e8518ffd709991ab67d68c3e4d500222892e1af7",
-      "after": "7327efb6d22c2d5fc724896dd5de15f11091615394c9501fb2b22e2eae2e4a9a"
+      "after": "bc05eb9d9772e4249a32bbf5dfa00e1c1ab64add1e2f035aad1767b5d23ad185"
     },
     "package.json": {
       "before": "95de2200987a246b3d225283118c7b1ae56293f90babb44716c43f68698fd6c9",
-      "after": "a753e334d71fbe6a76430bdaaa685516670e60a6c1df2769100f83406613258e"
+      "after": "2d3eace0f12a1933eca0ba4c29396aa9026472cd06aab840006618ee5dcec733"
     },
     "skills/ask-user/SKILL.md": {
       "before": "cab1a048232c59b6704e77064092709d824d9c57b7618d0b4d0394ee730fdb45",
@@ -65,8 +65,8 @@
   },
   "unchangedFromUpstream": [],
   "previous": {
-    "release": "enhanced-v1.4.0",
-    "version": "0.17.2-enhanced.1.4.0",
+    "release": "enhanced-v1.4.1",
+    "version": "0.17.2-enhanced.1.4.1",
     "upstream": "0.17.2",
     "hashes": {
       "index.ts": "b9944bea95497543a46bd8fc31c9a224450f03c7676f7b81109a6f94eed91146",
@@ -74,59 +74,77 @@
       "single-select-layout.ts": "ff4c55e062d9b8e667a49f2bf95d44a1dc219c1736773149b78beffa74f4c539",
       "tern.ts": "6c889a28cec80e1f4a45685131c5f1597d0a9600294d8f7f16ba0d1f3ff31b5d",
       "enhanced-ui.ts": "1498f8a420b8947483ff7a711b4c4ba898a155abb7728cff2a798fd22fdaccc2",
-      "ENHANCED.md": "73c472aa4f33b8ab6bdb92e2058d6a6193e757e1c5178b873d5345db9da0c676",
-      "README.md": "1c814b7eecd4c08a779640a467d9d0268a043c29ad31cb82e39463f5ce010b49",
-      "package.json": "8093ae5e69a7b472396ed161fa9fce70152314111129896d695a8fb01b9781df",
+      "ENHANCED.md": "1c6336a4c6cd16742c58d68b5024afa77b6752e2b1808c9ef20d1e29be3db33b",
+      "README.md": "7327efb6d22c2d5fc724896dd5de15f11091615394c9501fb2b22e2eae2e4a9a",
+      "package.json": "a753e334d71fbe6a76430bdaaa685516670e60a6c1df2769100f83406613258e",
       "skills/ask-user/SKILL.md": "f7df17c4437c1249032a45f96bbdcc02c15194ad321358ec589327db6dd9495d",
-      "skills/ask-user/references/ask-user-skill-extension-spec.md": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055"
+      "skills/ask-user/references/ask-user-skill-extension-spec.md": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055",
+      "LICENSE": "74abd8f85143a6472ec3f259cb9498e6fab02ca316ffab550304ffb5613c04e7"
     },
     "previous": {
-      "release": "enhanced-v1.3.0",
-      "version": "0.17.2-enhanced.1.3.0",
+      "release": "enhanced-v1.4.0",
+      "version": "0.17.2-enhanced.1.4.0",
       "upstream": "0.17.2",
       "hashes": {
-        "index.ts": "42cd37b181cdd6688846405aa6c7e498ad2c4f67649459fb5da694e68a237026",
+        "index.ts": "b9944bea95497543a46bd8fc31c9a224450f03c7676f7b81109a6f94eed91146",
         "settings.ts": "9ac712f0842e0ebf9824efc428891d93cacfd6fed3e746dd95e4a05aad69ddc8",
         "single-select-layout.ts": "ff4c55e062d9b8e667a49f2bf95d44a1dc219c1736773149b78beffa74f4c539",
         "tern.ts": "6c889a28cec80e1f4a45685131c5f1597d0a9600294d8f7f16ba0d1f3ff31b5d",
-        "enhanced-ui.ts": "a9ef39a58035ebf10ad788546025f1ffe35f59c1ac1e5fc477f46053b77e0e4b",
-        "ENHANCED.md": "a69260f4e209a012034934e91fb21f8691b3cfcd2c333d6b51aec18dbb488fb3",
-        "README.md": "1dd0f718dc927226646f0243364ca5c469913ca29cd6a6317a860f9d620bff93",
-        "package.json": "f619da810259eeaca953160a2f21e4f891303dfc3cf98ca45ebf6c73788b2784",
+        "enhanced-ui.ts": "1498f8a420b8947483ff7a711b4c4ba898a155abb7728cff2a798fd22fdaccc2",
+        "ENHANCED.md": "73c472aa4f33b8ab6bdb92e2058d6a6193e757e1c5178b873d5345db9da0c676",
+        "README.md": "1c814b7eecd4c08a779640a467d9d0268a043c29ad31cb82e39463f5ce010b49",
+        "package.json": "8093ae5e69a7b472396ed161fa9fce70152314111129896d695a8fb01b9781df",
         "skills/ask-user/SKILL.md": "f7df17c4437c1249032a45f96bbdcc02c15194ad321358ec589327db6dd9495d",
         "skills/ask-user/references/ask-user-skill-extension-spec.md": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055"
       },
       "previous": {
-        "release": "enhanced-v1.2.0",
-        "version": "0.17.2-enhanced.1.2.0",
+        "release": "enhanced-v1.3.0",
+        "version": "0.17.2-enhanced.1.3.0",
         "upstream": "0.17.2",
         "hashes": {
-          "index.ts": "45a989e9079b8d23740fad34996c69c17aac7151f7c419fdc63076dbded9511b",
+          "index.ts": "42cd37b181cdd6688846405aa6c7e498ad2c4f67649459fb5da694e68a237026",
           "settings.ts": "9ac712f0842e0ebf9824efc428891d93cacfd6fed3e746dd95e4a05aad69ddc8",
           "single-select-layout.ts": "ff4c55e062d9b8e667a49f2bf95d44a1dc219c1736773149b78beffa74f4c539",
           "tern.ts": "6c889a28cec80e1f4a45685131c5f1597d0a9600294d8f7f16ba0d1f3ff31b5d",
           "enhanced-ui.ts": "a9ef39a58035ebf10ad788546025f1ffe35f59c1ac1e5fc477f46053b77e0e4b",
-          "ENHANCED.md": "5b97ec3a7621160062500f23e64380215ce4c556c693dc14a004144ab3818d26",
-          "README.md": "11627dc0ae5fb3bef9aec77bf66eadaa0b169cc8eb25d0ef3093e9088996df49",
-          "package.json": "3d246c0f1d09aeb28502f6bf2dbcb596a16858cc5c774e46c30715cc766e7e37",
+          "ENHANCED.md": "a69260f4e209a012034934e91fb21f8691b3cfcd2c333d6b51aec18dbb488fb3",
+          "README.md": "1dd0f718dc927226646f0243364ca5c469913ca29cd6a6317a860f9d620bff93",
+          "package.json": "f619da810259eeaca953160a2f21e4f891303dfc3cf98ca45ebf6c73788b2784",
           "skills/ask-user/SKILL.md": "f7df17c4437c1249032a45f96bbdcc02c15194ad321358ec589327db6dd9495d",
           "skills/ask-user/references/ask-user-skill-extension-spec.md": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055"
         },
         "previous": {
-          "release": "enhanced-v1.1.3",
-          "upstream": "0.17.0",
-          "files": [
-            "index.ts",
-            "settings.ts"
-          ],
+          "release": "enhanced-v1.2.0",
+          "version": "0.17.2-enhanced.1.2.0",
+          "upstream": "0.17.2",
           "hashes": {
-            "index.ts": {
-              "before": "da2caef98bcd1b9a1040f2165c6d01dbab998d6d833a6c5cb447b9f527ceeb98",
-              "after": "33569a6698490ae6e091cdc25c99079e9e51326ac384e7003deac36506985d11"
-            },
-            "settings.ts": {
-              "before": "e01560fa759d8bdc4296c1edcbc63f935c358d8e8e454ec6fee49d5341e787e7",
-              "after": "d95b38af2085b414a0f52f95fd1ce5c320a7d2659f6ed612afb97eaeff326d44"
+            "index.ts": "45a989e9079b8d23740fad34996c69c17aac7151f7c419fdc63076dbded9511b",
+            "settings.ts": "9ac712f0842e0ebf9824efc428891d93cacfd6fed3e746dd95e4a05aad69ddc8",
+            "single-select-layout.ts": "ff4c55e062d9b8e667a49f2bf95d44a1dc219c1736773149b78beffa74f4c539",
+            "tern.ts": "6c889a28cec80e1f4a45685131c5f1597d0a9600294d8f7f16ba0d1f3ff31b5d",
+            "enhanced-ui.ts": "a9ef39a58035ebf10ad788546025f1ffe35f59c1ac1e5fc477f46053b77e0e4b",
+            "ENHANCED.md": "5b97ec3a7621160062500f23e64380215ce4c556c693dc14a004144ab3818d26",
+            "README.md": "11627dc0ae5fb3bef9aec77bf66eadaa0b169cc8eb25d0ef3093e9088996df49",
+            "package.json": "3d246c0f1d09aeb28502f6bf2dbcb596a16858cc5c774e46c30715cc766e7e37",
+            "skills/ask-user/SKILL.md": "f7df17c4437c1249032a45f96bbdcc02c15194ad321358ec589327db6dd9495d",
+            "skills/ask-user/references/ask-user-skill-extension-spec.md": "6c6f08416b58baaa6519f3ef85660455443effd21e8c77eefb8eb5dd18e65055"
+          },
+          "previous": {
+            "release": "enhanced-v1.1.3",
+            "upstream": "0.17.0",
+            "files": [
+              "index.ts",
+              "settings.ts"
+            ],
+            "hashes": {
+              "index.ts": {
+                "before": "da2caef98bcd1b9a1040f2165c6d01dbab998d6d833a6c5cb447b9f527ceeb98",
+                "after": "33569a6698490ae6e091cdc25c99079e9e51326ac384e7003deac36506985d11"
+              },
+              "settings.ts": {
+                "before": "e01560fa759d8bdc4296c1edcbc63f935c358d8e8e454ec6fee49d5341e787e7",
+                "after": "d95b38af2085b414a0f52f95fd1ce5c320a7d2659f6ed612afb97eaeff326d44"
+              }
             }
           }
         }

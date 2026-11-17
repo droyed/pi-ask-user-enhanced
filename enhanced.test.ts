@@ -836,6 +836,59 @@ describe("Fix 10: version", () => {
    test("the frame shows the enhanced version", async () => {
       let shown = "";
       await run({ question: "Pick", options: ["A"] }, (s) => (shown = s.text()));
-      expect(shown).toContain("v0.17.2-enhanced.1.4.1");
+      expect(shown).toContain("v0.17.2-enhanced.1.4.2");
+   });
+});
+
+// ── 1.4.2: titles, not ids, in what the user sees ──────────────────────────
+
+describe("1.4.2: the user sees option titles; the agent's text keeps ids", () => {
+   // Ids an agent chose (4–6 here) need not match the on-screen numbers (1–3).
+   const batch = {
+      questions: [
+         { question: "Language?", options: [{ id: 1, title: "TypeScript" }, { id: 2, title: "Go" }] },
+         { question: "Features?", allowMultiple: true, options: [{ id: 4, title: "Auth" }, { id: 5, title: "Billing" }, { id: 6, title: "Search" }] },
+      ],
+   };
+
+   test("the batch review page shows titles only", async () => {
+      let review = "";
+      const { result } = await run(batch, (s) => {
+         s.keys(KEY.enter); // TypeScript
+         s.keys(KEY.down, KEY.space, KEY.enter); // tick Billing
+         review = s.text();
+         s.keys(KEY.enter); // submit from the review page
+      });
+      expect(review).toContain("Review answers");
+      expect(review).toContain("→ Billing");
+      expect(review).not.toContain("5: Billing");
+      expect(review).not.toContain("1: TypeScript");
+      expect(result.content[0].text).toContain("5: Billing");
+      expect(result.content[0].text).toContain("1: TypeScript");
+   });
+
+   test("a single question's tool card shows titles; the agent's text keeps ids", async () => {
+      const { result } = await run({ question: "Features?", allowMultiple: true, options: batch.questions[1]!.options }, (s) => {
+         s.keys(KEY.down, KEY.space, KEY.enter);
+      });
+      expect(result.details.response.selectedIds).toEqual([5]);
+      expect(result.content[0].text).toBe("User answered: 5: Billing");
+      const { tool } = await setupTool();
+      const card = (tool.renderResult(result, { expanded: false, isPartial: false }, plainTheme) as any).render(100).map(strip).join("\n");
+      expect(card).toContain("Billing");
+      expect(card).not.toContain("5: Billing");
+   });
+
+   test("a batch tool card shows titles only", async () => {
+      const { result } = await run(batch, (s) => {
+         s.keys(KEY.enter);
+         s.keys(KEY.down, KEY.space, KEY.enter);
+         s.keys(KEY.enter);
+      });
+      const { tool } = await setupTool();
+      const card = (tool.renderResult(result, { expanded: true, isPartial: false }, plainTheme) as any).render(100).map(strip).join("\n");
+      expect(card).toContain("Billing");
+      expect(card).not.toContain("5: Billing");
+      expect(card).not.toContain("1: TypeScript");
    });
 });

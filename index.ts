@@ -389,10 +389,16 @@ function createSelectionResponse(selections: string[], comment?: string | null, 
       : { kind: "selection", selections: normalizedSelections, ...(selectedIds ? { selectedIds } : {}) };
 }
 
-function formatResponseSummary(response: AskResponse): string {
+/**
+ * One line for an answer. Option ids are prefixed (`5: Billing`) only when
+ * `showIds` is true: the agent's tool-result text keeps them, while what the
+ * user sees (review page, tool cards) shows titles only, because ids an agent
+ * chose need not match the on-screen option numbers.
+ */
+function formatResponseSummary(response: AskResponse, showIds = true): string {
    if (response.kind === "freeform") return response.text;
    const namedSelections = response.selections.map((title, index) =>
-      response.selectedIds?.[index] !== undefined ? `${response.selectedIds[index]}: ${title}` : title).join(", ");
+      showIds && response.selectedIds?.[index] !== undefined ? `${response.selectedIds[index]}: ${title}` : title).join(", ");
    if (response.kind === "combined") return `${namedSelections} + ${response.text}${response.comment ? ` — ${response.comment}` : ""}`;
 
    const selections = namedSelections;
@@ -3274,7 +3280,7 @@ class BatchAskComponent implements Component {
       return reviewSheet({
          rows: this.questions.map((entry, index) => {
             const response = this.answers[index];
-            return { question: entry.question, answer: response ? formatResponseSummary(response) : undefined };
+            return { question: entry.question, answer: response ? formatResponseSummary(response, false) : undefined };
          }),
          tabs: this.tabs,
          confirmSkips: this.confirmingSkips,
@@ -3341,7 +3347,7 @@ class BatchAskComponent implements Component {
          const marker = response ? theme.fg("success", "✓") : theme.fg("warning", "○");
          contentLines.push(...wrap(`${marker} ${theme.fg("text", `${index + 1}. ${entry.question}`)}`));
          contentLines.push(...wrap(response
-            ? `   ${theme.fg("dim", "→")} ${theme.fg("accent", formatResponseSummary(response))}`
+            ? `   ${theme.fg("dim", "→")} ${theme.fg("accent", formatResponseSummary(response, false))}`
             : `   ${theme.fg("warning", "unanswered")}`));
       });
 
@@ -4093,7 +4099,7 @@ function formatBatchResult(theme: Theme, details: AskBatchDetails, expanded: boo
       if (response.kind === "freeform") {
          text += theme.fg("muted", "(wrote) ");
       }
-      text += theme.fg("accent", formatResponseSummary(response));
+      text += theme.fg("accent", formatResponseSummary(response, false));
       if (!expanded) return;
       if (subject.context) {
          text += `\n   ${theme.fg("dim", subject.context)}`;
@@ -4449,7 +4455,7 @@ export default function(pi: ExtensionAPI) {
          if (response.kind === "freeform") {
             text += theme.fg("muted", "(wrote) ");
          }
-         text += theme.fg("accent", formatResponseSummary(response));
+         text += theme.fg("accent", formatResponseSummary(response, false));
 
          if (options.expanded) {
             text += "\n" + theme.fg("dim", `Q: ${details.question}`);

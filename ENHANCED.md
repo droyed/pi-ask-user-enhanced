@@ -4,11 +4,11 @@ This is an unofficial fork of [pi-ask-user](https://github.com/edlsh/pi-ask-user
 
 | | |
 |---|---|
-| Version | `0.17.2-enhanced.1.4.1` (shown at the bottom of every prompt) |
+| Version | `0.17.2-enhanced.1.4.2` (shown at the bottom of every prompt) |
 | Upstream base | pi-ask-user 0.17.2 |
-| Tested with | Pi 0.74.2, 0.87.0, 1.0.2 and 1.5.0 |
+| Tested with | Pi 0.74.2, 0.87.0, 1.0.2, 1.5.0 and 1.5.2 |
 
-Everything upstream documents in [README.md](README.md) still applies. This file covers what is different. The tool is still called `ask_user`, and it reads the same `ask-user.json` file and `PI_ASK_USER_*` environment variables, so it is a drop-in replacement.
+Everything upstream documents in [README.md](README.md) still applies. This file covers what is different. For a shorter overview with screenshots, see [FEATURES.md](https://github.com/droyed/pi-ask-user-enhanced/blob/enhanced-v1.4.2/FEATURES.md). The tool is still called `ask_user`, and it reads the same `ask-user.json` file and `PI_ASK_USER_*` environment variables, so it is a drop-in replacement.
 
 ## Install
 
@@ -19,10 +19,10 @@ Install it from GitHub. Remove upstream first if you have it: both register `ask
 pi remove npm:pi-ask-user
 
 # Install a release (pinned: `pi update` leaves it alone)
-pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1
+pi install git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.2
 ```
 
-To move to a newer release later, remove the pinned one (`pi remove git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.1`) and install the new tag. Installing without `@…` follows the `main` branch and updates with `pi update`. Releases are listed on the repository's [tags page](https://github.com/droyed/pi-ask-user-enhanced/tags).
+To move to a newer release later, remove the pinned one (`pi remove git:github.com/droyed/pi-ask-user-enhanced@enhanced-v1.4.2`) and install the new tag. Installing without `@…` follows the `main` branch and updates with `pi update`. Releases are listed on the repository's [tags page](https://github.com/droyed/pi-ask-user-enhanced/tags).
 
 To work on it, clone the repository and install the folder: `pi install ~/path/to/pi-ask-user-enhanced`. Pi loads local folders in place.
 
@@ -128,6 +128,7 @@ Give every option a unique positive integer `id` to refer to options by number. 
 - Once any option has an `id`, every option needs one, and ids must be unique. A call that breaks this fails with a message saying how to fix it.
 - `preselectedIds: []` means nothing is preselected.
 - In a batch, set `preselectedIds` on each question. A top-level `preselectedIds` next to `questions` is ignored, like the other per-question fields (upstream #88).
+- The review page and the tool cards show option titles only (`Billing`), so they always match the numbers on the question page, which are positions. The tool result the agent reads keeps the ids (`5: Billing`), and `selectedIds` is unchanged.
 
 ### Without the interactive UI (RPC and headless hosts)
 
@@ -165,11 +166,22 @@ type AskResponse =
 
 ## Compatibility
 
-- Pi 0.74.2, 0.87.0, 1.0.2 and 1.5.0: typecheck, all 240 tests (upstream's 181 plus 59 for this build), upstream's host smoke test through Pi's real extension loader, and the README and skill examples against Pi's validator.
+- Pi 0.74.2, 0.87.0, 1.0.2, 1.5.0 and 1.5.2: typecheck, all 243 tests (upstream's 181 plus 62 for this build), upstream's host smoke test through Pi's real extension loader, and the README and skill examples against Pi's validator.
 - Option ids are declared as whole numbers (`multipleOf: 1`) rather than with `Type.Integer`, so hosts with limited TypeBox shims still register the tool.
-- Mouse support works in Pi 1.0.2 and 1.5.0. Pi 0.74 has no mouse input for extensions, so there everything works from the keyboard.
+- Mouse support works in Pi 1.0.2 and later (tested up to 1.5.2). Pi 0.74 has no mouse input for extensions, so there everything works from the keyboard.
+
+## Known limitations
+
+- **Text in some scripts can misalign.** Pi measures text width with its own library, and terminals don't always agree, especially for Devanagari (Hindi), and in WezTerm also for Japanese, emoji and accented letters. Rows with such text can shift the preview's scrollbar and right edge. Upstream pi-ask-user behaves the same way; it isn't specific to this build.
 
 ## Changelog
+
+### enhanced 1.4.2 (on upstream 0.17.2)
+
+- The review page and the tool cards show option titles only. When an agent numbered options differently from their order on screen (for example ids 4–6 on a batch's second question), the review page showed `5: Billing` for the option listed as 2. The agent's tool result still includes the ids.
+- New [FEATURES.md](https://github.com/droyed/pi-ask-user-enhanced/blob/enhanced-v1.4.2/FEATURES.md): a one-page overview of the new features and how to use them, with screenshots.
+- New "Known limitations" section, from a hands-on pass in Ghostty and WezTerm.
+- Tested with Pi 1.5.2, which CI now also runs.
 
 ### enhanced 1.4.1 (on upstream 0.17.2)
 
